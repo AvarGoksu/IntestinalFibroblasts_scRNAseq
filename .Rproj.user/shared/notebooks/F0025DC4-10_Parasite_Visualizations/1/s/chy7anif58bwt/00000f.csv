@@ -1,0 +1,5 @@
+"0","# Define the bolder pastel colors"
+"0","stage_colors <- c(""uninfected_adult"" = ""#A9A9A9"","
+"0","                  ""early"" = ""#FFA07A"","
+"0","                  ""peak"" = ""#FF6347"","
+"0","                  ""repair"" = ""#77DD77"")"

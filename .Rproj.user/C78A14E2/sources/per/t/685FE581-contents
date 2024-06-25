@@ -1,0 +1,106 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(DESeq2)
+library(conflicted)
+library(openxlsx)
+#library(clusterProfiler)
+library(ComplexHeatmap)
+library(circlize)
+library(forcats)
+library(patchwork)
+options("print.matrix" = FALSE)
+```
+
+```{r}
+cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_normalized.csv"))
+rownames(cnt) <- cnt$CellName
+cnt <- cnt %>% dplyr::select(-CellName)
+cnt <- as.data.frame(t(cnt))
+```
+
+```{r}
+coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
+rownames(coldata) <- coldata$CellName
+
+#We have two leiden clusters of Adamdec1+ cells. We want to group them together for DEX analysis. We also have two samples of uninfected cells. We should group them too.
+coldata <- coldata %>%
+  dplyr::mutate(condition = paste0(identity, "_", stage_grouped))
+```
+```{r}
+# Define the bolder pastel colors
+stage_colors <- c("uninfected_adult" = "#A9A9A9",
+                  "early" = "#FFA07A",
+                  "peak" = "#FF6347",
+                  "repair" = "#77DD77")
+```
+
+```{r}
+representation <- dplyr::select(coldata, c(CellName, identity, stage_grouped)) %>%
+  dplyr::group_by(identity, stage_grouped) %>%
+  dplyr::summarise(n_cells = n()) %>%
+  dplyr::ungroup() %>%
+  dplyr::group_by(identity) %>%
+  dplyr::mutate(pct_cells = (n_cells*100)/sum(n_cells),
+                n_cells_total = sum(n_cells)) %>%
+  dplyr::ungroup() %>%
+  dplyr::arrange(desc(n_cells_total))
+
+representation$stage_grouped <- factor(representation$stage_grouped, levels=c("uninfected_adult", "early", "peak", "repair"))
+representation$identity <- factor(representation$identity, levels=unique(representation$identity))
+
+# Combine the data for both plots
+representation_long <- representation %>%
+  gather(key = "measure", value = "value", pct_cells, n_cells_total)
+representation_long$measure <- factor(representation_long$measure, levels = c("pct_cells","n_cells_total"))
+representation_long$stage_grouped <- fct_rev(factor(representation_long$stage_grouped, levels=c("uninfected_adult", "early", "peak", "repair")))
+```
+
+```{r}
+# Combined faceted plot
+
+facet_labels <- c("pct_cells" = "% of Cells", "n_cells_total" = "Number of Cells")
+legend_order <- levels(fct_rev(factor(representation_long$stage_grouped)))
+
+pdf("/vol/ExtraVol/ParasiteDEX/representations_parasite.pdf", width=10, height=5)
+ggplot(data = representation_long, aes(x = value, y = fct_rev(identity), fill = stage_grouped)) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = (stage_colors), breaks = legend_order) +
+  facet_wrap(~ measure, scales = "free_x", labeller = as_labeller(facet_labels)) +
+  theme_minimal(base_size = 15) +
+  theme(
+    panel.background = element_blank(),  # Remove panel background
+    plot.background = element_blank(),  # Remove plot background
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank(),  # Remove minor grid lines
+    axis.line = element_line(color = "black"),  # Add axis lines
+    legend.position = "bottom",  # Place legend at the bottom
+    strip.text = element_text(size = 15),  # Adjust facet label size
+    panel.spacing = unit(0.2, "lines"),  # Adjust space between facets
+    panel.spacing.x = unit(0.2, "cm"),  # Adjust horizontal space between facets
+    strip.placement = "outside",  # Place facet labels outside the plot
+    plot.margin = margin(10, 10, 10, 10),  # Adjust plot margins
+    plot.tag = element_text(size = 15),  # Adjust size of plot tag
+    panel.grid = element_blank(),  # Remove panel grid lines
+    strip.background = element_blank(),  # Remove strip background
+    plot.tag.position = "bottomright",     # Position of plot tag
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank()
+  ) +
+  labs(fill = "Infection Stage")  # Label for the legend
+dev.off()
+```
+
+```{r}
+marker_genes <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_Markers.xlsx")
+marker_genes <- marker_genes %>%
+  dplyr::arrange(desc(f_statistic)) %>%
+  head(n=100) %>%
+  dplyr::pull(Symbol)
+cnt_markers <- subset(cnt, rownames(cnt) %in% marker_genes)
+```
+

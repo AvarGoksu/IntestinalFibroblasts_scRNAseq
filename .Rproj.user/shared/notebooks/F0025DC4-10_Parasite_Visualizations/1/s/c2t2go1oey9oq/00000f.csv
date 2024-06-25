@@ -1,0 +1,15 @@
+"0","coldata <- as.data.frame(readr::read_csv(""/vol/ExtraVol/DataHistory/Parasite_Clustered_Metadata.csv"")) %>% dplyr::select(CellName, identity, stage, stage_grouped)"
+"2","New names:"
+"2","[1mRows: [22m[34m38029[39m [1mColumns: [22m[34m24[39m"
+"2","[36m──[39m [1mColumn specification[22m [36m───────────────────────────────────────────────────────────────────────[39m
+[1mDelimiter:[22m "",""
+[31mchr[39m  (9): Unnamed: 0, Sample_ID, stage, CellName, Doublet_classification, identity, leiden_...
+[32mdbl[39m (15): ...1, UMAP_1, UMAP_2, orig.ident, nCount_RNA, nFeature_RNA, percent.mt, doublet_f..."
+"2","
+[36mℹ[39m Use `spec()` to retrieve the full column specification for this data.
+[36mℹ[39m Specify the column types or set `show_col_types = FALSE` to quiet this message."
+"0","rownames(coldata) <- coldata$CellName"
+"0",""
+"0","#We have two leiden clusters of Adamdec1+ cells. We want to group them together for DEX analysis. We also have two samples of uninfected cells. We should group them too."
+"0","coldata <- coldata %>%"
+"0","  dplyr::mutate(condition = paste0(identity, ""_"", stage_grouped))"
