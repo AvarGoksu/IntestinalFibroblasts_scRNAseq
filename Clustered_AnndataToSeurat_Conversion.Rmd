@@ -1,0 +1,42 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+library(reticulate)
+library(parallel)
+library(SeuratDisk)
+library(anndata)
+```
+
+```{r}
+Convert("/vol/ExtraVol/LP_FSCs_clustered.h5ad", dest = "h5seurat", overwrite = TRUE)
+```
+
+```{r}
+use_condaenv("scanpy")
+```
+
+```{r}
+seu <- LoadH5Seurat("/vol/ExtraVol/LP_FSCs_clustered.h5seurat", meta.data = FALSE, misc = FALSE)
+DefaultAssay(seu) <- "raw_counts"
+seu[['RNA']] <- NULL
+```
+
+```{r}
+seu_obs <- read.csv("/vol/ExtraVol/LP_FSCs_clustered_meta.tsv/obs.csv", sep = "\t")
+rownames(seu_obs) <- seu_obs$X
+seu_obs <- dplyr::select(seu_obs, -X)
+```
+
+```{r}
+seu <- AddMetaData(seu, metadata = seu_obs)
+```
+
+```{r}
+saveRDS(seu, "/vol/ExtraVol/LP_FSCs_clustered.RDS")
+```
+
+

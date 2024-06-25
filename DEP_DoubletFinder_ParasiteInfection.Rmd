@@ -1,0 +1,176 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(reticulate)
+library(parallel)
+library(DoubletFinder)
+library(glmGamPoi)
+library(tidyverse)
+use_condaenv("scanpy")
+```
+
+```{r}
+parasite_infection <- readRDS("/vol/ExtraVol/Seurat_parasite_infection.RDS")
+
+#Set the factor levels
+parasite_infection@meta.data[["stage"]] <- factor(parasite_infection@meta.data[["stage"]], levels = c("uninfected", "early", "peak", "repair"))
+```
+
+```{r}
+parasite_infection[["percent.mt"]] <- PercentageFeatureSet(parasite_infection, pattern = "^mt-")
+```
+
+```{r}
+# Visualize QC metrics as a violin plot
+VlnPlot(parasite_infection, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(parasite_infection, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(parasite_infection, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r}
+num_genes_detected <- FetchData(parasite_infection, 'nFeature_RNA')
+```
+
+```{r}
+ggplot(num_genes_detected, aes(x=nFeature_RNA))+
+  geom_density()+
+  geom_vline(xintercept = mean(num_genes_detected$nFeature_RNA))+
+  geom_vline(xintercept = 1000)+
+  annotate("text", x = 1000, y = 3e-04, label = 1000)
+```
+
+```{r}
+#We filter out the cells with less than 1000 genes detected
+#parasite_infection <- subset(parasite_infection, nFeature_RNA >= 1000)
+
+#We filter out the cells with higher than 20% mitochondrial gene expression
+parasite_infection <- subset(parasite_infection, percent.mt <= 20)
+```
+
+```{r}
+parasite_infection.split <- SplitObject(parasite_infection, split.by = "stage") 
+remove(parasite_infection)
+
+# loop through samples to find doublets
+for (i in 1:length(parasite_infection.split)) {
+  # print the sample we are on
+  print(paste0("Sample ",i))
+  
+  # Pre-process seurat object with standard seurat workflow
+  #mouse.sample <- NormalizeData(parasite_infection.split[[i]], normalization.method = "LogNormalize", scale.factor = 10e4)
+  mouse.sample <- SCTransform(parasite_infection.split[[i]])
+  #mouse.sample <- FindVariableFeatures(mouse.sample, nfeatures = 2000)
+  #all.genes <- rownames(mouse.sample)
+  #mouse.sample <- ScaleData(mouse.sample, features = all.genes)
+  mouse.sample <- RunPCA(mouse.sample, nfeatures.print = 10)
+  
+  # Find significant PCs
+  stdv <- mouse.sample[["pca"]]@stdev
+  sum.stdv <- sum(mouse.sample[["pca"]]@stdev)
+  percent.stdv <- (stdv / sum.stdv) * 100
+  cumulative <- cumsum(percent.stdv)
+  co1 <- which(cumulative > 90 & percent.stdv < 5)[1]
+  co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] - 
+                       percent.stdv[2:length(percent.stdv)]) > 0.1), 
+              decreasing = T)[1] + 1
+  min.pc <- min(co1, co2)
+  min.pc
+  
+  # finish pre-processing
+  mouse.sample <- RunUMAP(mouse.sample, dims = 1:min.pc)
+  mouse.sample <- FindNeighbors(object = mouse.sample, dims = 1:min.pc)              
+  mouse.sample <- FindClusters(object = mouse.sample, resolution = 0.1, algorithm = 4)
+  
+  # pK identification (no ground-truth)
+  sweep.list <- paramSweep_v3(mouse.sample, PCs = 1:min.pc, num.cores = detectCores() - 1, sct = TRUE)
+  sweep.stats <- summarizeSweep(sweep.list)
+  bcmvn <- find.pK(sweep.stats)
+  
+  # Optimal pK is the max of the bomodality coefficent (BCmvn) distribution
+  bcmvn.max <- bcmvn[which.max(bcmvn$BCmetric),]
+  optimal.pk <- bcmvn.max$pK
+  optimal.pk <- as.numeric(levels(optimal.pk))[optimal.pk]
+  
+  ## Homotypic doublet proportion estimate
+  annotations <- mouse.sample@meta.data$seurat_clusters
+  homotypic.prop <- modelHomotypic(annotations) 
+  nExp.poi <- round(optimal.pk * nrow(mouse.sample@meta.data)) ## Assuming 7.5% doublet formation rate - tailor for your dataset
+  nExp.poi.adj <- round(nExp.poi * (1 - homotypic.prop))
+  
+  # run DoubletFinder
+  mouse.sample <- doubletFinder_v3(seu = mouse.sample, 
+                                   PCs = 1:min.pc, 
+                                   pK = optimal.pk,
+                                   nExp = nExp.poi.adj,
+                                   sct = TRUE)
+  metadata <- mouse.sample@meta.data
+  colnames(metadata)[9] <- "doublet_finder"
+  mouse.sample@meta.data <- metadata 
+  
+  # subset and save
+  #mouse.singlets <- subset(mouse.sample, doublet_finder == "Singlet")
+  parasite_infection.split[[i]] <- mouse.sample
+  remove(mouse.sample)
+}
+
+```
+
+```{r}
+parasite_infection.split[["uninfected"]]@meta.data[["Doublet_classification"]] <- parasite_infection.split[["uninfected"]]@meta.data[["DF.classifications_0.25_0.3_400"]] 
+parasite_infection.split[["uninfected"]]@meta.data[["pANN"]] <- parasite_infection.split[["uninfected"]]@meta.data[["pANN_0.25_0.3_400"]]
+
+parasite_infection.split[["repair"]]@meta.data[["Doublet_classification"]] <- parasite_infection.split[["repair"]]@meta.data[["DF.classifications_0.25_0.11_935"]]
+parasite_infection.split[["repair"]]@meta.data[["pANN"]] <- parasite_infection.split[["repair"]]@meta.data[["pANN_0.25_0.11_935"]]
+
+parasite_infection.split[["peak"]]@meta.data[["Doublet_classification"]] <- parasite_infection.split[["peak"]]@meta.data[["DF.classifications_0.25_0.29_1734"]]
+parasite_infection.split[["peak"]]@meta.data[["pANN"]] <- parasite_infection.split[["peak"]]@meta.data[["pANN_0.25_0.29_1734"]]
+
+parasite_infection.split[["early"]]@meta.data[["Doublet_classification"]] <- parasite_infection.split[["early"]]@meta.data[["DF.classifications_0.25_0.09_711"]]
+parasite_infection.split[["early"]]@meta.data[["pANN"]] <- parasite_infection.split[["early"]]@meta.data[["pANN_0.25_0.09_711"]]
+```
+
+```{r}
+# merge the splitted data back
+parasite_infection <- merge(x = parasite_infection.split[[1]],
+                       y = c(parasite_infection.split[[2]], 
+                             parasite_infection.split[[3]],
+                             parasite_infection.split[[4]]),
+                       project = "parasite_infection")
+parasite_infection
+```
+
+```{r}
+# store mitochondrial percentage in object meta data
+parasite_infection[["percent.mt"]] <- PercentageFeatureSet(parasite_infection, pattern = "^mt-")
+
+# run sctransform
+parasite_infection <- SCTransform(parasite_infection, vars.to.regress = "percent.mt", verbose = FALSE)
+```
+
+```{r}
+# These are now standard steps in the Seurat workflow for visualization and clustering
+parasite_infection <- RunPCA(parasite_infection, verbose = FALSE)
+parasite_infection <- RunUMAP(parasite_infection, dims = 1:30, verbose = FALSE)
+
+parasite_infection <- FindNeighbors(parasite_infection, dims = 1:30, verbose = FALSE)
+parasite_infection <- FindClusters(parasite_infection, verbose = FALSE, resolution = 0.1, algorithm = 4)
+
+DimPlot(parasite_infection, label = FALSE, group.by = "Doublet_classification", reduction = "umap")
+DimPlot(parasite_infection, label = FALSE, group.by = "stage", reduction = "umap")
+FeaturePlot(parasite_infection, reduction = "umap", features = "pANN")
+```
+
+```{r}
+saveRDS(parasite_infection, "/vol/ExtraVol/parasite_infection_withDoubletAnno.RDS")
+```
+

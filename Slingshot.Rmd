@@ -1,0 +1,75 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(tidyverse)
+library(data.table)
+library(BiocParallel)
+library(conflicted)
+library(slingshot)
+library(openxlsx)
+library(grDevices)
+library(RColorBrewer)
+```
+
+```{r}
+#cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/Ontogeny_Clustered_normalized.csv"))
+#rownames(cnt) <- cnt$CellName
+#cnt <- cnt %>% dplyr::select(-CellName)
+#cnt <- as.data.frame(t(cnt))
+```
+
+```{r}
+cl <- as.data.frame(readr::read_csv("/vol/ExtraVol/Ontogeny_Clustered_Metadata.csv")) %>%
+  dplyr::select(CellName, leiden_anno)
+
+umap <- as.data.frame(readr::read_csv("/vol/ExtraVol/Ontogeny_Clustered_Metadata.csv")) %>%
+  dplyr::select(CellName, UMAP_1, UMAP_2)
+
+rownames(cl) <- cl$CellName
+rownames(umap) <- umap$CellName
+
+cl <- dplyr::select(cl, -CellName)
+umap <- dplyr::select(umap, -CellName)
+
+#unique(colnames(cnt) == rownames(cl))
+#unique(colnames(cnt) == rownames(umap))
+```
+
+```{r}
+sce <- slingshot(umap, clusterLabels = cl, omega = TRUE,
+                 omega_scale = 1.5, 
+                 start.clus=c("Pericytes", "21/Ccl11-Actg2hi MF", "25/Colec10+_prolif. FB"),
+                 end.clus=c("14/Pericytes", "13/Ccl11+ MF"),
+                 dist.method = 'mnn')
+```
+
+```{r}
+summary(sce$slingPseudotime_1)
+```
+
+```{r}
+curves <- slingCurves(sce, as.df = TRUE) %>% arrange(Order)
+#mst <- slingMST(sce, as.df = TRUE)
+
+ggplot(umap, aes(x=UMAP_1, y=UMAP_2))+
+  geom_point(color = "grey100")+
+  #geom_point(data = mst, size = 4) +
+  #geom_path(data = mst %>% arrange(Order), aes(group = Lineage), size = 2) +
+  geom_path(data = curves %>% arrange(Order),
+            aes(group = Lineage, col = as.character(Lineage)), size = 1.5) 
+```
+```{r}
+plot(umap, asp = 1,
+     col = c(brewer.pal(9,"Set1"), brewer.pal(8,"Set2"))[coldata$leiden_anno])
+lines(SlingshotDataSet(sce), type = 'l', lwd=2, col='black')
+```
+
+```{r}
+data("slingshotExample")
+rd <- slingshotExample$rd
+cl <- slingshotExample$cl
+```
+
+

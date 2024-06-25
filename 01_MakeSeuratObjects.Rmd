@@ -1,0 +1,120 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(tidyverse)
+```
+
+```{r}
+seurat_obj_1 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002443/outs/filtered_feature_bc_matrix")
+seurat_obj_1 <- CreateSeuratObject(counts = seurat_obj_1, project = "23L002443")
+seurat_obj_1 <- AddMetaData(seurat_obj_1, "S1", col.name = "Sample_ID")
+seurat_obj_1 <- AddMetaData(seurat_obj_1, "uninfected_adult_1", col.name = "stage")
+
+
+seurat_obj_2 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002444/outs/filtered_feature_bc_matrix")
+seurat_obj_2 <- CreateSeuratObject(counts = seurat_obj_2, project = "23L002444")
+seurat_obj_2 <- AddMetaData(seurat_obj_2, "S2", col.name = "Sample_ID")
+seurat_obj_2 <- AddMetaData(seurat_obj_2, "repair", col.name = "stage")
+
+
+seurat_obj_3 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002445/outs/filtered_feature_bc_matrix")
+seurat_obj_3 <- CreateSeuratObject(counts = seurat_obj_3, project = "23L002445")
+seurat_obj_3 <- AddMetaData(seurat_obj_3, "S3", col.name = "Sample_ID")
+seurat_obj_3 <- AddMetaData(seurat_obj_3, "peak", col.name = "stage")
+
+
+seurat_obj_4 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002446/outs/filtered_feature_bc_matrix")
+seurat_obj_4 <- CreateSeuratObject(counts = seurat_obj_4, project = "23L002446")
+seurat_obj_4 <- AddMetaData(seurat_obj_4, "S4", col.name = "Sample_ID")
+seurat_obj_4 <- AddMetaData(seurat_obj_4, "early", col.name = "stage")
+
+#parasite_infection_temp_1 <- merge(seurat_obj_1, y = seurat_obj_2) 
+#parasite_infection_temp_2 <- merge(seurat_obj_3, y = seurat_obj_4) 
+
+#parasite_infection <- merge(parasite_infection_temp_1, parasite_infection_temp_2, project = "parasite_infection")
+
+#saveRDS(parasite_infection, "Seurat_parasite_infection.RDS")
+#rm(parasite_infection_temp_1, parasite_infection_temp_2, seurat_obj_1, seurat_obj_2, seurat_obj_3, seurat_obj_4)
+
+seurat_obj_5 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002447/outs/filtered_feature_bc_matrix")
+seurat_obj_5 <- CreateSeuratObject(counts = seurat_obj_5, project = "23L002447")
+seurat_obj_5 <- AddMetaData(seurat_obj_5, "S5", col.name = "Sample_ID")
+seurat_obj_5 <- AddMetaData(seurat_obj_5, "embryonic", col.name = "stage")
+
+seurat_obj_6 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002448/outs/filtered_feature_bc_matrix")
+seurat_obj_6 <- CreateSeuratObject(counts = seurat_obj_6, project = "23L002448")
+seurat_obj_6 <- AddMetaData(seurat_obj_6, "S6", col.name = "Sample_ID")
+seurat_obj_6 <- AddMetaData(seurat_obj_6, "shortly_after_birth", col.name = "stage")
+
+seurat_obj_7 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002449/outs/filtered_feature_bc_matrix")
+seurat_obj_7 <- CreateSeuratObject(counts = seurat_obj_7, project = "23L002449")
+seurat_obj_7 <- AddMetaData(seurat_obj_7, "S7", col.name = "Sample_ID")
+seurat_obj_7 <- AddMetaData(seurat_obj_7, "after_weaning", col.name = "stage")
+
+seurat_obj_8 <- Read10X("/vol/MainVol/Project_663_scRNA_Seq_MSZP85_87/23L002450/outs/filtered_feature_bc_matrix")
+seurat_obj_8 <- CreateSeuratObject(counts = seurat_obj_8, project = "23L002450")
+seurat_obj_8 <- AddMetaData(seurat_obj_8, "S8", col.name = "Sample_ID")
+seurat_obj_8 <- AddMetaData(seurat_obj_8, "uninfected_adult_2", col.name = "stage")
+
+#ontogeny_temp_1 <- merge(seurat_obj_5, y = seurat_obj_6) 
+#ontogeny_temp_2 <- merge(seurat_obj_7, y = seurat_obj_8) 
+
+#ontogeny <- merge(ontogeny_temp_1, ontogeny_temp_2, project = "ontogeny")
+
+#saveRDS(ontogeny, "Seurat_ontogeny.RDS")
+#rm(ontogeny_temp_1, ontogeny_temp_2, seurat_obj_5, seurat_obj_6, seurat_obj_7, seurat_obj_8)
+```
+```{r}
+merged_data <- merge(seurat_obj_1, c(seurat_obj_2, seurat_obj_3, seurat_obj_4, seurat_obj_5, seurat_obj_6, seurat_obj_7, seurat_obj_8), project = "Merged")
+
+merged_data <- JoinLayers(merged_data)
+```
+
+```{r}
+saveRDS(merged_data, "/vol/ExtraVol/MergedData_Unprocessed.RDS")
+```
+
+```{r}
+
+# # Initialize a list to hold Seurat objects for the first and second set of experiments
+# seurat_list1 <- list()
+# #seurat_list2 <- list()
+# 
+# # List of sample IDs for the first and second set of experiments
+# sample_ids1 <- paste0("23L", sprintf("%06d", 2443:2446), "_S", 1:4)
+# #sample_ids2 <- paste0("23L", sprintf("%06d", 2447:2450), "_S", 5:8)
+# 
+# # Loop over each sample to create a Seurat object for the first experiment
+# for(i in 1:length(sample_ids1)) {
+#   # Define path to the STARsolo output
+#   starsolo_dir <- paste0("./star_out/", sample_ids1[i], "/Gene/raw/")
+# 
+#   # Read STARsolo data
+#   seurat_obj <- ReadSTARsolo(starsolo_dir)
+# 
+#   # Add to the list
+#   seurat_list1[[i]] <- seurat_obj
+# }
+# 
+# # # Loop over each sample to create a Seurat object for the second experiment
+# # for(i in 1:length(sample_ids2)) {
+# #   # Define path to the STARsolo output
+# #   starsolo_dir <- paste0("./star_out/", sample_ids2[i], "/solo.out/")
+# # 
+# #   # Read STARsolo data
+# #   seurat_obj <- ReadSTARsolo(starsolo_dir)
+# # 
+# #   # Add to the list
+# #   seurat_list2[[i]] <- seurat_obj
+# # }
+# 
+# # Combine all Seurat objects into one for each experiment
+# combined_seurat_obj1 <- merge(seurat_list1[[1]], y = seurat_list1[2:length(sample_ids1)])
+# #combined_seurat_obj2 <- merge(seurat_list2[[1]], y = seurat_list2[2:length(sample_ids2)])
+
+```
+
+

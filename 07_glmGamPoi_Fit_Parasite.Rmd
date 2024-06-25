@@ -1,0 +1,378 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(glmGamPoi)
+library(dplyr)
+#library(SummarizedExperiment)
+#library(data.table)
+#library(DESeq2)
+#library(BiocParallel)
+library(openxlsx)
+#library(ggplot2)
+```
+
+```{r}
+cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/Parasite_Clustered_raw.csv"))
+
+#Determine the protein coding genes using the feature table from the same reference genome that was used for alignment
+genomic_features <- read.csv("/vol/MainVol/MouseGenome/Genomic_Features.tsv", row.names = NULL, sep="\t")
+protein_coding_genes <- unique(subset(genomic_features, Gene.Type == "protein-coding")$Symbol)
+
+#This is to add full names of the genes to the results
+gene_metadata <- dplyr::select(genomic_features, c(Name, Symbol)) %>% 
+  dplyr::rename("name" = "Symbol",
+                "open_name" = "Name") %>%
+  distinct()
+
+rownames(cnt) <- cnt$CellName
+cnt <- cnt %>% dplyr::select(-CellName)
+cnt <- as.data.frame(t(cnt))
+
+#Keep only the protein coding genes
+cnt <- subset(cnt, rownames(cnt) %in% protein_coding_genes)
+
+# totalcounts <- rowSums(cnt)
+# nonzero_counts <- apply(cnt, 1, function(row) sum(row != 0))
+# 
+# totalcounts_nonzero <- data.frame(
+#   row_names = rownames(cnt),
+#   totalcounts = totalcounts,
+#   nonzero_counts = nonzero_counts
+# )
+# 
+# ggplot(totalcounts_nonzero, aes(x=nonzero_counts, y=totalcounts))+
+#   geom_point()
+
+cnt <- cnt[rowSums(cnt) > 10, ]
+
+rm(genomic_features)
+gc()
+```
+
+```{r}
+coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
+rownames(coldata) <- coldata$CellName
+
+#We have two leiden clusters of Adamdec1+ cells. We want to group them together for DEX analysis. We also have two samples of uninfected cells. We should group them too.
+coldata <- coldata %>%
+  dplyr::mutate(condition = paste0(identity, "_", stage_grouped))
+```
+
+```{r}
+# # Function to assign replicates more evenly
+# assign_replicates <- function(rows) {
+#   base_per_rep <- floor(rows / 5)
+#   additional <- rows %% 5
+#   rep_vector <- rep(paste0("Rep", 1:5), each = base_per_rep)
+#   if (additional > 0) {
+#     rep_vector <- c(rep_vector, paste0("Rep", 1:additional))
+#   }
+#   sample(rep_vector)  # Shuffle the assignment to maintain randomness
+# }
+# 
+# # Apply the function to coldata
+# coldata <- coldata %>%
+#   group_by(condition) %>%
+#   mutate(PseudoReplicate = assign_replicates(n())) %>%
+#   ungroup()
+```
+
+```{r}
+# # Check how many pseudoreplicates we have for each conditions after random sampling
+# coldata <- coldata %>% 
+#   dplyr::group_by(condition, PseudoReplicate) %>%
+#   dplyr::mutate(n_PseudoReplicate = n()) %>%
+#   dplyr::ungroup()
+```
+
+```{r}
+#Assign row names to coldata and check if the count table and coldata have matching column/row names:
+coldata <- as.data.frame(coldata)
+rownames(coldata) <- coldata$CellName
+unique(colnames(cnt) == rownames(coldata))
+```
+
+```{r}
+#DelayedArray::setAutoBlockSize(1e9)
+#DelayedArray::setAutoBlockShape('last-dim-grows-first')
+```
+
+```{r}
+#cnt <- HDF5Array::writeHDF5Array(as.matrix(cnt))
+cnt <- as.matrix(cnt)
+gc()
+
+#coldata_subset <- subset(coldata, identity %in% c("Pericytes", "Ccl11+ MF"))
+#cnt_subset <- cnt[, coldata_subset$CellName]
+#rm(coldata_subset, cnt_subset)
+
+fit <- glm_gp(cnt,
+              col_data = coldata,
+              design = ~1+identity+stage_grouped+identity:stage_grouped,
+              size_factors = "deconvolution",
+              subsample = FALSE,
+              verbose=TRUE,
+              on_disk = FALSE)
+```
+
+```{r}
+saveRDS(fit, "/vol/ExtraVol/parasite_glmGamPoi_fit_full.RDS")
+```
+
+```{r}
+#fit <- readRDS("/vol/ExtraVol/parasite_glmGamPoi_fit_full_2.RDS")
+```
+
+```{r}
+res_interaction <- test_de(fit, reduced_design = ~1+identity+stage_grouped)
+
+res_interaction <- res_interaction %>%
+  dplyr::select(name, pval, adj_pval, f_statistic)
+  # dplyr::mutate(
+  #   pval = case_when(
+  #     pval == 0 ~ .Machine$double.xmin,
+  #     .default = pval),
+  #   adj_pval = case_when(
+  #   adj_pval == 0 ~ .Machine$double.xmin,
+  #   .default = adj_pval)
+  #   ) %>%
+
+res_interaction_merged <- merge(res_interaction, gene_metadata, by="name") %>% arrange(desc(f_statistic))
+
+write.xlsx(res_interaction_sorted, "/vol/ExtraVol/DEX_results_parasite_interaction.xlsx")
+```
+
+```{r}
+res_infection <- test_de(fit, reduced_design = ~1+identity)
+
+res_infection <- res_infection %>%
+  dplyr::select(name, pval, adj_pval, f_statistic)
+  # dplyr::mutate(
+  #   pval = case_when(
+  #     pval == 0 ~ .Machine$double.xmin,
+  #     .default = pval),
+  #   adj_pval = case_when(
+  #   adj_pval == 0 ~ .Machine$double.xmin,
+  #   .default = adj_pval)
+  #   ) %>%
+
+res_infection_merged <- merge(res_infection, gene_metadata, by="name") %>% arrange(desc(f_statistic))
+
+write.xlsx(res_infection_sorted, "/vol/ExtraVol/DEX_results_parasite_infection.xlsx")
+```
+
+### THE END ###
+
+```{r}
+# coldata_subset <- subset(coldata, leiden_anno_grouped == "1/FB_Adamdec1-")
+# cnt_subset <- dplyr::select(cnt, coldata_subset$CellName)
+# cnt_subset <- cnt_subset[rowSums(cnt_subset) > 10,]
+```
+
+```{r}
+# fit <- glm_gp(as.matrix(cnt), 
+#               col_data = coldata, 
+#               design = ~condition)
+```
+
+```{r}
+# res3 <- test_de(fit, contrast = cond(condition = "1/FB_Adamdec1-_peak") -
+#                                 cond(condition = "1/FB_Adamdec1-_uninfected"))
+```
+
+```{r}
+# dds <- DESeqDataSetFromMatrix(countData = cnt_subset, colData = coldata_subset, design = ~condition)
+# 
+# dds <- scran::computeSumFactors(dds)
+# 
+# dds <- DESeq(dds, parallel=FALSE, fitType = 'glmGamPoi', test = "LRT", reduced = ~1, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)
+# 
+# resultsNames(dds)
+```
+
+
+```{r}
+# condition_sample_size <- coldata %>%
+#   dplyr::group_by(condition) %>%
+#   dplyr::summarise(sample_size = n()) %>%
+#   dplyr::mutate(subsample_size_psd = ceiling(sample_size/10))
+```
+
+```{r}
+#coldata_withsamplesize <- merge(coldata, condition_sample_size, by="condition", all=TRUE)
+```
+
+```{r}
+# # Initialize a list to store the data frames from each iteration
+# pseudobulk_samples <- list()
+# 
+# # Outer loop for each unique condition
+# for (i in unique(coldata$condition)) {
+#   # Inner loop to iterate 5 times for each condition
+#   for (j in 1:10) {
+#     # 5-fold subsample sizes were previously calculated in the subsample_size column
+#     i_subsample_size <- unique(subset(coldata, condition == i)$subsample_size)
+#     # Retrieve all the sample IDs that correspond to the condition
+#     i_sample_pool <- subset(coldata, condition == i)$CellName
+#     # Do the subsampling on the retrieved sample IDs (i.e., return a subset of IDs)
+#     i_subsample_ids <- sample(i_sample_pool, size = i_subsample_size)
+#     # Use these IDs to actually subset the count matrix, ensuring it remains a matrix
+#     i_cnt <- cnt[,i_subsample_ids, drop = FALSE]
+#     # Calculate the average count for each gene (i.e., rowwise means). This is 1 pseudobulk replicate.
+#     i_pseudobulk_sample <- as.integer(rowMeans(i_cnt))
+# 
+#     # Store each replicate in the list with a unique name
+#     pseudobulk_samples[[paste0(i, "_Rep", j)]] <- i_pseudobulk_sample
+#   }
+# }
+# 
+# # Convert the list of vectors to a data frame
+# final_pseudobulk_df <- as.data.frame(pseudobulk_samples)
+# 
+# # Manually set the column names from the list to retain original characters
+# colnames(final_pseudobulk_df) <- names(pseudobulk_samples)
+# 
+# # Optional: if you want to set the row names as gene names
+# # Assuming the row names of 'cnt' are gene names
+# rownames(final_pseudobulk_df) <- rownames(cnt)
+```
+
+```{r}
+# pseudobulk_coldata <- as.data.frame(colnames(final_pseudobulk_df))
+# colnames(pseudobulk_coldata) <- "SampleName"
+# rownames(pseudobulk_coldata) <- pseudobulk_coldata$SampleName
+# # Using stringr to extract the condition from SampleName
+# pseudobulk_coldata$condition <- stringr::str_extract(pseudobulk_coldata$SampleName, ".*?(?=_Rep)")
+# pseudobulk_coldata_merged <- merge(pseudobulk_coldata, 
+#                                    dplyr::select(coldata, -c(CellName, leiden_anno, stage)),
+#                                    by = "condition") %>% distinct()
+# rownames(pseudobulk_coldata_merged) <- pseudobulk_coldata_merged$SampleName
+```
+
+```{r}
+# # Reorder the columns of final_pseudobulk_df to match the order in pseudobulk_coldata$SampleName
+# final_pseudobulk_df <- final_pseudobulk_df[, rownames(pseudobulk_coldata_merged)]
+# 
+# unique(colnames(final_pseudobulk_df) == rownames(pseudobulk_coldata_merged))
+```
+
+```{r}
+# final_pseudobulk_df <- final_pseudobulk_df[rowSums(final_pseudobulk_df) > 10,]
+```
+
+```{r}
+# rowSums_final_pseudobulk_df <- as.data.frame(rowSums(final_pseudobulk_df))
+# colnames(rowSums_final_pseudobulk_df) <- "GeneCounts"
+```
+
+```{r}
+#Here with a more complex design apprıach, we are attempting to show the cell type specific gene expression changes at different stages of infection by adding the cell type:infection stage as an interaction term to the model matrix
+# dds_CellTypeSpecificity <- DESeqDataSetFromMatrix(countData = final_pseudobulk_df, colData = pseudobulk_coldata_merged, design = ~leiden_anno_grouped+stage_grouped+leiden_anno_grouped:stage_grouped)
+# 
+# dds_CellTypeSpecificity <- scran::computeSumFactors(dds_CellTypeSpecificity)
+# 
+# dds_CellTypeSpecificity <- DESeq(dds_CellTypeSpecificity, parallel=TRUE, fitType = 'glmGamPoi', test = "LRT", reduced = ~leiden_anno_grouped+stage_grouped, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)
+# 
+# resultsNames(dds)
+```
+
+```{r}
+# fit <- glm_gp(as.matrix(final_pseudobulk_df),
+#               col_data = pseudobulk_coldata_merged,
+#               design = ~condition,
+#               size_factors = "deconvolution")
+```
+
+```{r}
+# Run only if the condition is grouped by leiden_anno instead of leiden_anno_grouped
+# res_0uninfected_2uninfected <- test_de(fit, 
+#                contrast = cond(condition = "0/FB_Adamdec1+_1_uninfected") -
+#                           cond(condition = "2/FB_Adamdec1+_2_uninfected"),
+#                max_lfc=5,
+#                sort_by="adj_pval") %>% 
+#   dplyr::mutate(adj_pval = case_when(adj_pval == 0 ~ .Machine$double.xmin,
+#                                 TRUE ~ adj_pval), 
+#                 signed_padj = sign(lfc)*-log10(adj_pval)) %>%
+#   dplyr::rename("Symbol" = "name") %>%
+#   dplyr::arrange(desc(signed_padj))
+# 
+# write.xlsx(res_0uninfected_2uninfected, "/vol/ExtraVol/res_0uninfected_2uninfected.xlsx")
+```
+
+```{r}
+#Let's discover what some of the results look like
+# res_adamdec1neg_early <- test_de(fit, 
+#                contrast = cond(condition = "1/FB_Adamdec1-_early") -
+#                           cond(condition = "1/FB_Adamdec1-_uninfected"),
+#                max_lfc=5,
+#                sort_by="adj_pval")
+# 
+# res_adamdec1neg_peak <- test_de(fit, 
+#                contrast = cond(condition = "1/FB_Adamdec1-_peak") -
+#                           cond(condition = "1/FB_Adamdec1-_uninfected"),
+#                max_lfc=5,
+#                sort_by="adj_pval")
+# 
+# res_adamdec1neg_repair <- test_de(fit, 
+#                contrast = cond(condition = "1/FB_Adamdec1-_repair") -
+#                           cond(condition = "1/FB_Adamdec1-_uninfected"),
+#                max_lfc=5,
+#                sort_by="adj_pval")
+```
+
+
+```{r}
+# #Here we are following a simple pair-wise approach accross conditions to detect the differential gene expression in each and every cell type and infection stage
+# dds <- DESeqDataSetFromMatrix(countData = final_pseudobulk_df, colData = pseudobulk_coldata_merged, design = ~condition)
+# 
+# dds <- scran::computeSumFactors(dds)
+# 
+# # dds <- DESeq(dds, parallel=TRUE, fitType = 'glmGamPoi', test = "LRT", reduced = ~1, useT=TRUE, minmu=1e-6, minReplicatesForReplace=Inf)
+# 
+# #Use DESeq for count normalization
+# normalized_counts <- counts(dds, normalized=TRUE)
+```
+
+```{r}
+# # Transform counts for data visualization
+# vsd <- vst(dds, blind=TRUE, nsub = sum( rowMeans( counts(dds, normalized=TRUE)) > 10 ))
+# 
+# # Plot PCA
+# 
+# DESeq2::plotPCA(vsd, intgroup = "condition")
+```
+
+```{r}
+# saveRDS(fit, "/vol/ExtraVol/glm_gp_object_parasite_pseudobulk.RDS")
+# write.csv(normalized_counts, "/vol/ExtraVol/deseq2_normalized_counts_parasite_pseudobulk.tsv", sep="\t")
+# write.csv(assay(vsd), "/vol/ExtraVol/deseq2_vst_counts_parasite_pseudobulk.tsv", sep="\t")
+```
+
+```{r}
+# res <- results(dds,
+#                contrast=c("condition", 
+#                           "0-2/FB_Adamdec1+_peak", 
+#                           "0-2/FB_Adamdec1+_uninfected"),
+#                alpha=0.01)
+# 
+# res <- lfcShrink(dds, 
+#                  contrast=c("condition", 
+#                             "0-2/FB_Adamdec1+_peak", 
+#                             "0-2/FB_Adamdec1+_uninfected"), 
+#                  type="ashr",
+#                  svalue = FALSE)
+# summary(res)
+```
+
+```{r}
+# res_list<-data.frame(gene = rownames(res), res,
+# stringsAsFactors = F) %>% na.omit() %>% dplyr::select("log2FoldChange", "padj") %>% dplyr::mutate(minuslogp = -log10(padj), "LFCminuslogp" = log2FoldChange*minuslogp) %>% rownames_to_column(var = "gene")
+```
+
+
+```{r}
+# saveRDS(dds, "/vol/ExtraVol/dds_parasite.RDS")
+```
+

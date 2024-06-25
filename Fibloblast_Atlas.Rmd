@@ -1,0 +1,43 @@
+```{r}
+library(Seurat)
+library(reticulate)
+use_condaenv("scanpy")
+```
+
+
+```{r}
+fibroblast_atlas <- readRDS("/vol/ExtraVol/Mouse_SS_Fibro.RDS")
+```
+
+```{r}
+intestine_atlas <- subset(fibroblast_atlas, Tissue == "Intestine")
+```
+
+
+```{r}
+intestine_atlas <- NormalizeData(intestine_atlas, normalization.method = "LogNormalize", scale.factor = 10e4)
+intestine_atlas <- FindVariableFeatures(intestine_atlas, nfeatures = 2000)
+all.genes <- rownames(intestine_atlas)
+intestine_atlas <- ScaleData(intestine_atlas, features = all.genes)
+intestine_atlas <- RunPCA(intestine_atlas, nfeatures.print = 10)
+  
+# Find significant PCs
+stdv <- intestine_atlas[["pca"]]@stdev
+sum.stdv <- sum(intestine_atlas[["pca"]]@stdev)
+percent.stdv <- (stdv / sum.stdv) * 100
+cumulative <- cumsum(percent.stdv)
+co1 <- which(cumulative > 90 & percent.stdv < 5)[1]
+co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] - 
+                       percent.stdv[2:length(percent.stdv)]) > 0.1), 
+              decreasing = T)[1] + 1
+min.pc <- min(co1, co2)
+min.pc
+  
+# finish pre-processing
+intestine_atlas <- RunUMAP(intestine_atlas, dims = 1:min.pc)
+intestine_atlas <- suppressWarnings(FindNeighbors(object = intestine_atlas, dims = 1:min.pc))              
+intestine_atlas <- suppressWarnings(FindClusters(object = intestine_atlas, algorithm = 4))
+```
+```{r}
+FeaturePlot(intestine_atlas, feature="Acta2")
+```

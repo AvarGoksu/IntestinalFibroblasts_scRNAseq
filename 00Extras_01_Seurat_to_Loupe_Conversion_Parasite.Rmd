@@ -1,0 +1,72 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(loupeR)
+library(Seurat)
+library(tidyverse)
+library(data.table)
+library(Matrix)
+library(openxlsx)
+options(Seurat.object.assay.version = "v3")
+```
+
+```{r}
+cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/Parasite_Clustered_raw.csv"))
+rownames(cnt) <- cnt$CellName
+cnt <- cnt %>% dplyr::select(-CellName)
+cnt <- as.data.frame(t(cnt))
+```
+
+```{r}
+metadata <- as.data.frame(readr::read_csv("/vol/ExtraVol/Parasite_Clustered_Metadata.csv"))
+rownames(metadata) <- metadata$CellName
+metadata <- metadata %>% dplyr::select(-c(`...1`,`Unnamed: 0`, orig.ident, CellName))
+```
+
+```{r}
+metadata <- metadata %>% 
+  dplyr::mutate(condition = paste0(identity, "_", stage_grouped))
+```
+
+```{r}
+seu <- CreateAssayObject(counts = cnt)
+seu <- CreateSeuratObject(seu, meta.data = metadata)
+```
+
+```{r}
+#Convert the v5 assay to a v3 assay because LoupeR has a problem with v5 in this version.
+#seu[["RNA3"]] <- as(object = seu[["RNA"]], Class = "Assay")
+```
+
+```{r}
+seu<- SetIdent(seu, value = seu@meta.data$identity)
+```
+
+```{r}
+#Check how the examples from 10X look like
+clusters_example <- readRDS("/vol/ExtraVol/clusters.RDS")
+projections_example <- readRDS("/vol/ExtraVol/projections.RDS")
+```
+
+```{r}
+#Create the clusters and projections similar to the 10X examples
+clusters <- select_clusters(seu)
+projections <- list(umap = as.matrix(dplyr::select(metadata, c(UMAP_1, UMAP_2))))
+```
+
+```{r}
+create_loupe(count_mat = seu@assays[["RNA"]]@counts, 
+             clusters = clusters, 
+             projections = projections, 
+             output_name = "/vol/ExtraVol/Parasite_Loupe",
+             force=TRUE)
+```
+```{r}
+cluster_markers <- as.data.frame(readr::read_csv("/vol/ExtraVol/Ontogeny_ClusterMarkers_Wilcox.csv"))
+cluster_markers <- cluster_markers %>% dplyr::select(-c(`...1`,pct_nz_group, pct_nz_reference))
+write.xlsx(cluster_markers, "/vol/ExtraVol/Ontogeny_ClusterMarkers_Wilcox.xlsx")
+
+```
+

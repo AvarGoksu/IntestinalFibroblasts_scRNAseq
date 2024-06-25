@@ -1,0 +1,197 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(reticulate)
+library(parallel)
+library(DoubletFinder)
+library(glmGamPoi)
+library(tidyverse)
+use_condaenv("scanpy")
+```
+
+```{r}
+ontogeny <- readRDS("/vol/ExtraVol/Seurat_ontogeny.RDS")
+
+#Set the factor levels
+ontogeny@meta.data[["stage"]] <- factor(ontogeny@meta.data[["stage"]], levels = c("embryonic", "shortly_after_birth", "after_weaning", "adult"))
+```
+
+```{r}
+ontogeny[["percent.mt"]] <- PercentageFeatureSet(ontogeny, pattern = "^mt-")
+```
+
+```{r}
+# Visualize QC metrics as a violin plot
+VlnPlot(ontogeny, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(ontogeny, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(ontogeny, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r}
+num_genes_detected <- FetchData(ontogeny, 'nFeature_RNA')
+```
+
+```{r}
+ggplot(num_genes_detected, aes(x=nFeature_RNA))+
+  geom_density()+
+  geom_vline(xintercept = mean(num_genes_detected$nFeature_RNA))+
+  geom_vline(xintercept = 1000)+
+  annotate("text", x = 1000, y = 3e-04, label = 1000)
+```
+
+```{r}
+#We filter out the cells with less than 1000 genes detected
+#ontogeny <- subset(ontogeny, nFeature_RNA >= 1000)
+
+#We filter out the cells with higher than 20% mitochondrial gene expression
+ontogeny <- subset(ontogeny, percent.mt <= 20)
+```
+
+```{r}
+ontogeny.split <- SplitObject(ontogeny, split.by = "stage") 
+remove(ontogeny)
+
+# loop through samples to find doublets
+for (i in 1:length(ontogeny.split)) {
+  # print the sample we are on
+  print(paste0("Sample ",i))
+  
+  # Pre-process seurat object with standard seurat workflow
+  mouse.sample <- NormalizeData(ontogeny.split[[i]], normalization.method = "LogNormalize", scale.factor = 10e4)
+  #mouse.sample <- SCTransform(ontogeny.split[[i]])
+  mouse.sample <- FindVariableFeatures(mouse.sample, nfeatures = 2000)
+  all.genes <- rownames(mouse.sample)
+  mouse.sample <- ScaleData(mouse.sample, features = all.genes)
+  mouse.sample <- RunPCA(mouse.sample, nfeatures.print = 10)
+  
+  # Find significant PCs
+  stdv <- mouse.sample[["pca"]]@stdev
+  sum.stdv <- sum(mouse.sample[["pca"]]@stdev)
+  percent.stdv <- (stdv / sum.stdv) * 100
+  cumulative <- cumsum(percent.stdv)
+  co1 <- which(cumulative > 90 & percent.stdv < 5)[1]
+  co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] - 
+                       percent.stdv[2:length(percent.stdv)]) > 0.1), 
+              decreasing = T)[1] + 1
+  min.pc <- min(co1, co2)
+  min.pc
+  
+  # finish pre-processing
+  mouse.sample <- RunUMAP(mouse.sample, dims = 1:min.pc)
+  mouse.sample <- FindNeighbors(object = mouse.sample, dims = 1:min.pc)              
+  mouse.sample <- FindClusters(object = mouse.sample, resolution = 0.1, algorithm = 4)
+  
+  # pK identification (no ground-truth)
+  sweep.list <- paramSweep_v3(mouse.sample, PCs = 1:min.pc, num.cores = detectCores() - 1, sct = FALSE)
+  sweep.stats <- summarizeSweep(sweep.list)
+  bcmvn <- find.pK(sweep.stats)
+  
+  # Optimal pK is the max of the bomodality coefficent (BCmvn) distribution
+  bcmvn.max <- bcmvn[which.max(bcmvn$BCmetric),]
+  optimal.pk <- bcmvn.max$pK
+  optimal.pk <- as.numeric(levels(optimal.pk))[optimal.pk]
+  
+  ## Homotypic doublet proportion estimate
+  annotations <- mouse.sample@meta.data$seurat_clusters
+  homotypic.prop <- modelHomotypic(annotations) 
+  nExp.poi <- round(optimal.pk * nrow(mouse.sample@meta.data)) ## Assuming 7.5% doublet formation rate - tailor for your dataset
+  nExp.poi.adj <- round(nExp.poi * (1 - homotypic.prop))
+  
+  # run DoubletFinder
+  mouse.sample <- doubletFinder_v3(seu = mouse.sample, 
+                                   PCs = 1:min.pc, 
+                                   pK = optimal.pk,
+                                   nExp = nExp.poi.adj,
+                                   sct = FALSE)
+  metadata <- mouse.sample@meta.data
+  colnames(metadata)[9] <- "doublet_finder"
+  mouse.sample@meta.data <- metadata 
+  
+  # subset and save
+  #mouse.singlets <- subset(mouse.sample, doublet_finder == "Singlet")
+  ontogeny.split[[i]] <- mouse.sample
+  remove(mouse.sample)
+}
+
+```
+
+```{r}
+ontogeny.split[["embryonic"]]@meta.data[["Doublet_classification"]] <- ontogeny.split[["embryonic"]]@meta.data[["DF.classifications_0.25_0.03_209"]] 
+ontogeny.split[["embryonic"]]@meta.data[["pANN"]] <- ontogeny.split[["embryonic"]]@meta.data[["pANN_0.25_0.03_209"]]
+
+ontogeny.split[["shortly_after_birth"]]@meta.data[["Doublet_classification"]] <- ontogeny.split[["shortly_after_birth"]]@meta.data[["DF.classifications_0.25_0.05_315"]]
+ontogeny.split[["shortly_after_birth"]]@meta.data[["pANN"]] <- ontogeny.split[["shortly_after_birth"]]@meta.data[["pANN_0.25_0.05_315"]]
+
+ontogeny.split[["after_weaning"]]@meta.data[["Doublet_classification"]] <- ontogeny.split[["after_weaning"]]@meta.data[["DF.classifications_0.25_0.27_945"]]
+ontogeny.split[["after_weaning"]]@meta.data[["pANN"]] <- ontogeny.split[["after_weaning"]]@meta.data[["pANN_0.25_0.27_945"]]
+
+ontogeny.split[["adult"]]@meta.data[["Doublet_classification"]] <- ontogeny.split[["adult"]]@meta.data[["DF.classifications_0.25_0.21_1552"]]
+ontogeny.split[["adult"]]@meta.data[["pANN"]] <- ontogeny.split[["adult"]]@meta.data[["pANN_0.25_0.21_1552"]]
+```
+
+```{r}
+# merge the splitted data back
+ontogeny <- merge(x = ontogeny.split[[1]],
+                       y = c(ontogeny.split[[2]], 
+                             ontogeny.split[[3]],
+                             ontogeny.split[[4]]),
+                       project = "ontogeny")
+ontogeny
+```
+
+
+```{r}
+rm(ontogeny.split)
+```
+
+```{r}
+# store mitochondrial percentage in object meta data
+ontogeny[["percent.mt"]] <- PercentageFeatureSet(ontogeny, pattern = "^mt-")
+
+# run sctransform
+ontogeny <- SCTransform(ontogeny, vars.to.regress = "percent.mt", verbose = FALSE)
+```
+
+```{r}
+# These are now standard steps in the Seurat workflow for visualization and clustering
+ontogeny <- RunPCA(ontogeny, verbose = FALSE)
+ontogeny <- RunUMAP(ontogeny, dims = 1:30, verbose = FALSE)
+
+ontogeny <- FindNeighbors(ontogeny, dims = 1:30, verbose = FALSE)
+ontogeny <- FindClusters(ontogeny, verbose = FALSE, resolution = 0.1, algorithm = 4)
+
+DimPlot(ontogeny, label = FALSE, group.by = "Doublet_classification", reduction = "umap")
+DimPlot(ontogeny, label = FALSE, group.by = "stage", reduction = "umap")
+FeaturePlot(ontogeny, reduction = "umap", features = "pANN")
+```
+
+```{r}
+#Remove the doublets
+ontogeny <- subset(ontogeny, Doublet_classification == "Singlet")
+
+#Remove the unnecessary metadata to save space
+ontogeny@meta.data[["doublet_finder"]] <- NULL
+ontogeny@meta.data[["DF.classifications_0.25_0.03_209"]] <- NULL
+ontogeny@meta.data[["DF.classifications_0.25_0.05_315"]] <- NULL
+ontogeny@meta.data[["DF.classifications_0.25_0.27_945"]] <- NULL
+ontogeny@meta.data[["DF.classifications_0.25_0.21_1552"]] <- NULL
+ontogeny@meta.data[["pANN_0.25_0.03_209"]] <- NULL
+ontogeny@meta.data[["pANN_0.25_0.05_315"]] <- NULL
+ontogeny@meta.data[["pANN_0.25_0.27_945"]] <- NULL
+ontogeny@meta.data[["pANN_0.25_0.21_1552"]] <- NULL
+
+
+#Save the doublet annotated 
+saveRDS(ontogeny, "/vol/ExtraVol/ontogeny_mito_doublet_cleaned.RDS")
+```
+

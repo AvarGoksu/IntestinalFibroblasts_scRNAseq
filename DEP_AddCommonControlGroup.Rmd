@@ -1,0 +1,47 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(parallel)
+library(tidyverse)
+```
+
+```{r}
+ontogeny <- readRDS("/vol/ExtraVol/ontogeny_mito_doublet_cleaned.RDS")
+
+#Set the factor levels
+ontogeny@meta.data[["stage"]] <- factor(ontogeny@meta.data[["stage"]], levels = c("embryonic", "shortly_after_birth", "after_weaning", "adult"))
+
+ontogeny.split <- SplitObject(ontogeny, split.by = "stage") 
+```
+
+```{r}
+parasite_infection <- readRDS("/vol/ExtraVol/parasite_infection_mito_doublet_cleaned.RDS")
+
+#Set the factor levels
+parasite_infection@meta.data[["stage"]] <- factor(parasite_infection@meta.data[["stage"]], levels = c("uninfected", "early", "peak", "repair"))
+
+parasite_infection.split <- SplitObject(parasite_infection, split.by = "stage") 
+```
+
+```{r}
+ontogeny <- merge(x = ontogeny,
+                       y = c(parasite_infection.split[["uninfected"]]),
+                       project = "ontogeny")
+
+parasite_infection <- merge(x = parasite_infection,
+                       y = c(ontogeny.split[["adult"]]),
+                       project = "parasite_infection")
+```
+
+```{r}
+saveRDS(ontogeny, "/vol/ExtraVol/ontogeny_mito_doublet_cleaned_control_added.RDS")
+saveRDS(parasite_infection, "/vol/ExtraVol/parasite_infection_mito_doublet_cleaned_control_added.RDS")
+```
+
+
+
+
+

@@ -1,0 +1,246 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(reticulate)
+library(parallel)
+library(DoubletFinder)
+library(glmGamPoi)
+library(tidyverse)
+library(scater)
+library(paletteer)
+library(ggsci)
+library(RColorBrewer)
+use_condaenv("scanpy")
+```
+
+```{r}
+color_palette <- brewer.pal(n=8,"Accent")
+```
+
+```{r}
+seu <- readRDS("/vol/ExtraVol/MergedData_Unprocessed.RDS")
+
+#Set the factor levels
+seu@meta.data[["stage"]] <- factor(seu@meta.data[["stage"]], levels = c("embryonic", "shortly_after_birth", "after_weaning", "uninfected_adult_2", "uninfected_adult_1", "early", "peak", "repair"))
+
+#Convert the v5 assay to a v3 assay because DoubletFinder has a problem with v5 at this version.
+seu[["RNA"]] <- as(object = seu[["RNA"]], Class = "Assay")
+
+seu <- SetIdent(seu, value = seu@meta.data$stage)
+```
+
+```{r}
+seu[["percent.mt"]] <- PercentageFeatureSet(seu, pattern = "^mt-")
+```
+
+```{r}
+# Visualize QC metrics as a violin plot
+VlnPlot(seu, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3, pt.size = 0)
+```
+
+```{r}
+# FeatureScatter is typically used to visualize feature-feature relationships, but can be used
+# for anything calculated by the object, i.e. columns in object metadata, PC scores etc.
+
+plot1 <- FeatureScatter(seu, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(seu, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+```{r}
+percent_mito_df <- data.frame(percent.mt = seu@meta.data[["percent.mt"]],
+                          stage = seu@meta.data[["stage"]],
+                          cell = rownames(seu@meta.data))
+
+percent_mito_df$stage <- factor(percent_mito_df$stage, levels = c("embryonic", "shortly_after_birth", "after_weaning", "uninfected_adult_2", "uninfected_adult_1", "early", "peak", "repair"))
+```
+
+```{r}
+pdf('/vol/ExtraVol/mito_percent.pdf', width = 4, height = 3)
+ggplot(percent_mito_df, aes(y=log1p(percent.mt), x=stage, fill=stage)) +
+  geom_violin() +
+  scale_fill_manual(values=color_palette) +
+  geom_jitter(color = "black", alpha = 0.1, size = 0.1, width = 0.1) +
+  geom_hline(yintercept=log1p(20), linetype="dashed") +  # Make the horizontal line dashed
+  theme_minimal(base_size = 12) +  # Sets a minimal theme with white background
+  theme(
+    legend.position = "none",  # Remove legend
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels by 45 degrees
+  )
+dev.off()
+```
+
+```{r}
+nFeature_df <- data.frame(nFeature_RNA = seu@meta.data[["nFeature_RNA"]],
+                          stage = seu@meta.data[["stage"]],
+                          cell = rownames(seu@meta.data))
+
+nFeature_df <- nFeature_df %>%
+  dplyr::group_by(stage) %>%
+  dplyr::mutate(isOutlier = as.vector(isOutlier(nFeature_RNA, nmads = 3, type = "both", log = TRUE)))
+
+pdf('/vol/ExtraVol/n_genes_detected.pdf', width = 4, height = 3)
+ggplot(nFeature_df, aes(x=nFeature_RNA)) +
+  geom_histogram(aes(fill=isOutlier, alpha = 0.5), color=NA) +
+  facet_wrap(~stage, ncol = 4, scales = "free") +
+  scale_fill_manual(values = c("TRUE" = "#CC0000", "FALSE" = "#7F8C8D")) +
+  theme_minimal(base_size = 6) +
+  theme(
+    legend.position = "none",  # Remove legend
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels by 45 degrees
+  )
+dev.off()
+```
+
+```{r}
+nCount_df <- data.frame(nCount_RNA = seu@meta.data[["nCount_RNA"]],
+                          stage = seu@meta.data[["stage"]],
+                          cell = rownames(seu@meta.data))
+
+nCount_df <- nCount_df %>%
+  dplyr::group_by(stage) %>%
+  dplyr::mutate(isOutlier = as.vector(isOutlier(nCount_RNA, nmads = 3, type = "both", log = TRUE)))
+
+pdf('/vol/ExtraVol/total_counts_detected.pdf', width = 4, height = 3)
+ggplot(nCount_df, aes(x=nCount_RNA)) +
+  geom_histogram(aes(fill=isOutlier, alpha = 0.5), color=NA) +
+  facet_wrap(~stage, ncol = 4, scales = "free") +
+  scale_fill_manual(values = c("TRUE" = "#CC0000", "FALSE" = "#7F8C8D")) +
+  theme_minimal(base_size = 6) +
+  theme(
+    legend.position = "none",  # Remove legend
+    axis.text.x = element_text(angle = 45, hjust = 1)  # Rotate x-axis labels by 45 degrees
+  )
+dev.off()
+```
+
+```{r}
+seu[["CellName"]] <- colnames(seu)
+
+#Do the filtering.
+
+#Filter by mitochondrial:
+seu <- subset(seu, percent.mt <= 20)
+
+#Filter by the number of genes detected:
+nFeature_df_filtered <- subset(nFeature_df, isOutlier == FALSE)
+seu <- subset(seu, CellName %in% nFeature_df_filtered$cell)
+
+#Filter by the total counts: 
+nCount_df_filtered <- subset(nCount_df, isOutlier == FALSE)
+seu <- subset(seu, CellName %in% nCount_df_filtered$cell)
+```
+
+```{r}
+seu.split <- SplitObject(seu, split.by = "stage") 
+#remove(seu)
+
+# loop through samples to find doublets
+for (i in 1:length(seu.split)) {
+  # print the sample we are on
+  print(paste0("Sample ",i))
+  
+  # Pre-process seurat object with standard seurat workflow
+  mouse.sample <- NormalizeData(seu.split[[i]], normalization.method = "LogNormalize", scale.factor = 10e4)
+  mouse.sample <- FindVariableFeatures(mouse.sample, nfeatures = 2000)
+  all.genes <- rownames(mouse.sample)
+  mouse.sample <- ScaleData(mouse.sample, features = all.genes)
+  mouse.sample <- RunPCA(mouse.sample, nfeatures.print = 10)
+  
+  # Find significant PCs
+  stdv <- mouse.sample[["pca"]]@stdev
+  sum.stdv <- sum(mouse.sample[["pca"]]@stdev)
+  percent.stdv <- (stdv / sum.stdv) * 100
+  cumulative <- cumsum(percent.stdv)
+  co1 <- which(cumulative > 90 & percent.stdv < 5)[1]
+  co2 <- sort(which((percent.stdv[1:length(percent.stdv) - 1] - 
+                       percent.stdv[2:length(percent.stdv)]) > 0.1), 
+              decreasing = T)[1] + 1
+  min.pc <- min(co1, co2)
+  min.pc
+  
+  # finish pre-processing
+  mouse.sample <- RunUMAP(mouse.sample, dims = 1:min.pc)
+  mouse.sample <- suppressWarnings(FindNeighbors(object = mouse.sample, dims = 1:min.pc))              
+  mouse.sample <- suppressWarnings(FindClusters(object = mouse.sample, algorithm = 4))
+  
+  # pK identification (no ground-truth)
+  sweep.list <- paramSweep_v3(mouse.sample, PCs = 1:min.pc, num.cores = detectCores() - 1, sct = FALSE)
+  sweep.stats <- summarizeSweep(sweep.list)
+  bcmvn <- find.pK(sweep.stats)
+  
+  # Optimal pK is the max of the bomodality coefficent (BCmvn) distribution
+  bcmvn.max <- bcmvn[which.max(bcmvn$BCmetric),]
+  optimal.pk <- bcmvn.max$pK
+  optimal.pk <- as.numeric(levels(optimal.pk))[optimal.pk]
+  
+  ## Homotypic doublet proportion estimate
+  annotations <- mouse.sample@meta.data$seurat_clusters
+  homotypic.prop <- modelHomotypic(annotations) 
+  nExp.poi <- round(optimal.pk * nrow(mouse.sample@meta.data)) ## Assuming 7.5% doublet formation rate
+  nExp.poi.adj <- round(nExp.poi * (1 - homotypic.prop))
+  
+  # run DoubletFinder
+  mouse.sample <- doubletFinder_v3(seu = mouse.sample, 
+                                   PCs = 1:min.pc, 
+                                   pK = optimal.pk,
+                                   nExp = nExp.poi.adj,
+                                   sct = FALSE)
+  metadata <- mouse.sample@meta.data
+  colnames(metadata)[9] <- "doublet_finder"
+  mouse.sample@meta.data <- metadata 
+  
+  # subset and save
+  #mouse.singlets <- subset(mouse.sample, doublet_finder == "Singlet")
+  seu.split[[i]] <- mouse.sample
+  remove(mouse.sample)
+}
+
+```
+```{r}
+#Simplify the names in the DoubletFinder output
+for (i in 1:length(seu.split)) {
+  # Retrieve the Seurat object
+  current_seurat_object <- seu.split[[i]]
+
+  # Find the column that starts with "DF.classifications" and rename it
+  df_col <- grep("^DF.classifications", colnames(current_seurat_object@meta.data), value = TRUE)
+  if(length(df_col) == 1) {
+    colnames(current_seurat_object@meta.data)[colnames(current_seurat_object@meta.data) == df_col] <- "Doublet_classification"
+  }
+
+  # Find the column that starts with "pANN" and rename it
+  pANN_col <- grep("^pANN", colnames(current_seurat_object@meta.data), value = TRUE)
+  if(length(pANN_col) == 1) {
+    colnames(current_seurat_object@meta.data)[colnames(current_seurat_object@meta.data) == pANN_col] <- "pANN"
+  }
+
+  # Save the modified object back into the list
+  seu.split[[i]] <- current_seurat_object
+}
+```
+
+```{r}
+# merge the splitted data back. do.call(merge()) did not work, so just do it manually:
+seu <- merge(x = seu.split[[1]],
+                       y = c(seu.split[[2]], 
+                             seu.split[[3]],
+                             seu.split[[4]],
+                             seu.split[[5]],
+                             seu.split[[6]],
+                             seu.split[[7]],
+                             seu.split[[8]]),
+                       project = "MergedData")
+
+seu
+```
+```{r}
+seu <- subset(seu, Doublet_classification == "Singlet")
+```
+
+```{r}
+saveRDS(seu, "/vol/ExtraVol/MergedData_Preprocessed.RDS")
+```

@@ -1,0 +1,129 @@
+```{r}
+rm(list = ls())
+```
+
+
+```{r}
+library(openxlsx)
+library(tidyverse)
+library(ggpubr)
+library(ggforce)
+library(reshape2)
+library(ggpubr)
+library(org.Hs.eg.db)
+library(AnnotationDbi)
+library(enrichplot)
+library(clusterProfiler)
+library(msigdbr)
+library(forcats)
+library(ggrepel)
+library(GSVA)
+```
+
+```{r}
+#Read the fitted glmGamPoi object
+fit <- readRDS("/vol/ExtraVol/glm_gp_object_parasite_pseudobulk.RDS")
+
+#Read the normalized count data for visualizations and downstream analyses
+normalized_counts <- as.data.frame(read_csv("/vol/ExtraVol/deseq2_normalized_counts_parasite_pseudobulk.tsv")) 
+rownames(normalized_counts) <- normalized_counts$...1
+normalized_counts <- normalized_counts %>% dplyr::select(-c(...1))
+
+#Read the vst transformed count data for visualizations
+vsd <- as.data.frame(read_csv("/vol/ExtraVol/deseq2_vst_counts_parasite_pseudobulk.tsv")) 
+rownames(vsd) <- vsd$...1
+vsd <- vsd %>% dplyr::select(-c(...1))
+```
+
+```{r}
+reactome_genesets <- msigdbr(species = "Mus musculus", 
+                             category = "C2", 
+                             subcategory = "CP:REACTOME") %>% 
+  dplyr::select(gs_name, gene_symbol) %>% distinct()
+
+reactome_genesets_subset <- reactome_genesets %>% 
+  subset(gs_name %in% c("REACTOME_DEGRADATION_OF_THE_EXTRACELLULAR_MATRIX",
+                        "REACTOME_CELLULAR_RESPONSE_TO_HEAT_STRESS",
+                        "REACTOME_ACTIVATION_OF_MATRIX_METALLOPROTEINASES",
+                        "REACTOME_ECM_PROTEOGLYCANS",
+                        "REACTOME_IMMUNOREGULATORY_INTERACTIONS_BETWEEN_A_LYMPHOID_AND_A_NON_LYMPHOID_CELL",
+                        "REACTOME_SIGNALING_BY_INTERLEUKINS"))
+
+reactome_list <- unlist(split(reactome_genesets_subset, 
+                              f = reactome_genesets_subset$gs_name), 
+                        recursive = F)
+```
+
+```{r}
+cnt_adamdec1pos <- normalized_counts %>% dplyr::select(starts_with("0-2/FB_Adamdec1+"))
+
+gsva_object <- gsvaParam(exprData = as.matrix(cnt_adamdec1pos), geneSets = reactome_list)
+gsva_res_reactome <- gsva(gsva_object, verbose=FALSE)
+```
+```{r}
+# Function to assign shorter group names based on keywords
+short_group_name <- function(x) {
+  case_when(
+    str_detect(x, "uninfected") ~ "uninfected",
+    str_detect(x, "early") ~ "early",
+    str_detect(x, "peak") ~ "peak",
+    str_detect(x, "repair") ~ "repair",
+    TRUE ~ "other"
+  )
+}
+
+gsva_res_reactome_melted <- reshape2::melt(gsva_res_reactome, 
+                                           varnames=c('GeneSet', 'SampleName'),
+                                           value.name = "GSVAscore") %>%
+  dplyr::mutate(SampleGroup = str_remove_all(SampleName, '_Rep.+'),
+                GeneSet = str_remove_all(GeneSet, ".gene_symbol"),
+                GeneSet = str_remove_all(GeneSet, "REACTOME_"),
+                PlotGroup = short_group_name(SampleGroup))
+
+# Function to create an ordering factor
+ordering_factor <- function(x) {
+  case_when(
+    str_detect(x, "uninfected") ~ "1_uninfected",
+    str_detect(x, "early") ~ "2_early",
+    str_detect(x, "peak") ~ "3_peak",
+    str_detect(x, "repair") ~ "4_repair",
+    TRUE ~ "5_other"
+  )
+}
+
+# Add the ordering factor to the dataframe
+gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
+  mutate(OrderFactor = ordering_factor(SampleGroup),
+         SampleGroup = factor(SampleGroup, levels = unique(SampleGroup[order(OrderFactor)])))
+
+# Optionally, you can remove the OrderFactor column if it's no longer needed
+gsva_res_reactome_melted <- dplyr::select(gsva_res_reactome_melted, -OrderFactor)
+
+# Define group colors
+group_colors <- c("uninfected" = "#1f77b4", "early" = "#ff7f0e", "peak" = "#2ca02c", "repair" = "#d62728")
+
+# Calculate means for each SampleGroup
+median <- gsva_res_reactome_melted %>%
+  group_by(SampleGroup, GeneSet) %>%
+  summarize(median_GSVAscore = median(GSVAscore))
+
+pdf("GSVAexample.pdf", width = 10, height = 4)
+ggplot(gsva_res_reactome_melted, aes(y = GSVAscore, x = SampleGroup, color = PlotGroup)) +
+  geom_point() +
+  geom_line(data = median, aes(y = median_GSVAscore, group = 1), color = "black") +
+  scale_color_manual(values = group_colors) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+        strip.text = element_text(size = 4)) +
+  facet_wrap(~GeneSet, ncol = 3, nrow=3)
+dev.off()
+```
+
+```{r}
+ggplot(gsva_res_reactome_melted, aes(y=GSVAscore, x=SampleGroup))+
+  geom_point()+
+  theme_minimal()+
+  ggtitle(paste0(unique(gsva_res_reactome_melted$GeneSet)))
+  
+```
+

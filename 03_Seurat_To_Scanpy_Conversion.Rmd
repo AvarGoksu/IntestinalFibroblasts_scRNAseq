@@ -1,0 +1,37 @@
+```{r}
+rm(list = ls())
+```
+
+```{r}
+library(Seurat)
+library(reticulate)
+library(parallel)
+library(DoubletFinder)
+library(glmGamPoi)
+library(tidyverse)
+library(scater)
+library(paletteer)
+library(ggsci)
+library(RColorBrewer)
+library(SeuratDisk)
+library(data.table)
+use_condaenv("scanpy")
+```
+
+```{r}
+seu <- readRDS("/vol/ExtraVol/MergedData_Preprocessed.RDS")
+
+raw_counts <- as.data.frame(as.matrix(seu@assays[["RNA"]]@counts))
+fwrite(x = raw_counts, file = "/vol/ExtraVol/MergedData_Preprocessed.csv", row.names = TRUE)
+
+df_metadata <- seu@meta.data
+
+#Python does not understand R factors at the moment. So convert our factors into characters.
+df_metadata$stage <- as.character(df_metadata$stage)
+
+#Remove unnecessary metadata to save space
+df_metadata <- df_metadata %>% dplyr::select(-c(RNA_snn_res.0.8, pANN))
+fwrite(x = df_metadata, file = "/vol/ExtraVol/MergedData_Preprocessed_Metadata.csv", row.names = TRUE)
+```
+
+
