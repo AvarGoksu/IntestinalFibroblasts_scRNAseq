@@ -150,7 +150,7 @@ for (name in names(results_list)) {
 }
 
 # Save the workbook
-saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX_PairwiseResults.xlsx", overwrite = TRUE)
+saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseResults.xlsx", overwrite = TRUE)
 ```
 
 ```{r}
@@ -160,7 +160,17 @@ res_main_infection <- test_de(fit, reduced_design = ~1+identity) %>%
       merge(genomic_features_unique, by = "Symbol") %>%
       dplyr::arrange(desc(f_statistic))
 
-write.xlsx(res_main_infection, "/vol/ExtraVol/ParasiteDEX_MainInfectionResults.xlsx", overwrite = TRUE)
+write.xlsx(res_main_infection, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_MainInfectionResults.xlsx", overwrite = TRUE)
+```
+
+```{r}
+res_interaction <- test_de(fit, reduced_design = ~1+identity+stage_grouped) %>%
+      dplyr::select(-c(df1, df2)) %>%
+      dplyr::rename("Symbol" = "name") %>%
+      merge(genomic_features_unique, by = "Symbol") %>%
+      dplyr::arrange(desc(f_statistic))
+
+write.xlsx(res_interaction, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_InteractionResults.xlsx", overwrite = TRUE)
 ```
 
 ```{r}

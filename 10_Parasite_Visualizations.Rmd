@@ -13,16 +13,9 @@ library(ComplexHeatmap)
 library(circlize)
 library(forcats)
 library(RColorBrewer)
+library(reshape2)
 options("print.matrix" = FALSE)
 ```
-
-```{r}
-cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_normalized.csv"))
-rownames(cnt) <- cnt$CellName
-cnt <- cnt %>% dplyr::select(-CellName)
-cnt <- as.data.frame(t(cnt))
-```
-
 ```{r}
 coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
 rownames(coldata) <- coldata$CellName
@@ -33,11 +26,10 @@ coldata <- coldata %>%
 ```
 
 ```{r}
-# Define the bolder pastel colors
-stage_colors <- c("uninfected_adult" = "#A9A9A9",
-                  "early" = "#FFA07A",
-                  "peak" = "#FF6347",
-                  "repair" = "#77DD77")
+cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_normalized.csv"))
+rownames(cnt) <- cnt$CellName
+cnt <- cnt %>% dplyr::select(-CellName)
+cnt <- as.data.frame(t(cnt))
 ```
 
 ```{r}
@@ -59,6 +51,129 @@ representation_long <- representation %>%
   gather(key = "measure", value = "value", pct_cells, n_cells_total)
 representation_long$measure <- factor(representation_long$measure, levels = c("pct_cells","n_cells_total"))
 representation_long$stage_grouped <- fct_rev(factor(representation_long$stage_grouped, levels=c("uninfected_adult", "early", "peak", "repair")))
+```
+
+```{r}
+marker_genes_df <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_Markers.xlsx")
+marker_genes_temp <- marker_genes_df %>%
+  dplyr::arrange(desc(f_statistic)) %>%
+  head(n=100) %>%
+  dplyr::pull(Symbol)
+marker_genes <- c(marker_genes_temp, "Cd81", "Hand1", "Ccl11", "Cd55")
+
+infection_genes_df <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_MainInfectionResults.xlsx")
+infection_genes <- infection_genes_df %>%
+  subset(!str_detect(Symbol, "Rpl|Rps")) %>%
+  dplyr::arrange(desc(f_statistic)) %>%
+  head(n=100) %>%
+  dplyr::pull(Symbol)
+
+interaction_genes_df <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_InteractionResults.xlsx")
+interaction_genes <- interaction_genes_df %>%
+  subset(!str_detect(Symbol, "Rpl|Rps")) %>%
+  dplyr::arrange(desc(f_statistic)) %>%
+  head(n=100) %>%
+  dplyr::pull(Symbol)
+
+uninfected_cells_df <- coldata %>%
+  subset(stage_grouped == "uninfected_adult")
+
+uninfected_cells_df$identity <- factor(uninfected_cells_df$identity, levels=unique(representation$identity))
+
+# Sort the dataframe by the factor levels
+uninfected_cells_df <- uninfected_cells_df %>%
+  arrange(identity)
+
+uninfected_cells <- uninfected_cells_df$CellName
+
+cnt_markers <- subset(cnt, rownames(cnt) %in% marker_genes)
+cnt_markers <- cnt_markers %>% dplyr::select(all_of(uninfected_cells))
+
+cnt_infection <- subset(cnt, rownames(cnt) %in% infection_genes)
+
+cnt_infection_temp <- reshape2::melt(as.matrix(cnt_infection), value.name = "Expression", varnames = c("Symbol", "CellName"))
+cnt_infection_long <- merge(cnt_infection_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(condition_Symbol = paste0(condition, "_", Symbol)) %>%
+  dplyr::group_by(condition_Symbol) %>%
+  dplyr::mutate(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup()
+
+cnt_infection_percentages <- cnt_infection_long %>%
+  dplyr::mutate(condition_Symbol = paste0(condition, "_", Symbol)) %>%
+  dplyr::group_by(condition_Symbol) %>%
+  dplyr::summarise(
+    nonzero_count_cells = sum(Expression != 0),
+    total_count_cells = n()
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(pct_expressed = (nonzero_count_cells*100)/total_count_cells)
+
+cnt_infection_scaled <- t(scale(t(cnt_infection)))
+cnt_infection_scaled_temp <- reshape2::melt(as.matrix(cnt_infection_scaled), value.name = "ScaledExpression", varnames = c("Symbol", "CellName"))
+cnt_infection_scaled_long <- merge(cnt_infection_scaled_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(condition_Symbol = paste0(condition, "_", Symbol)) %>%
+  dplyr::group_by(condition_Symbol) %>%
+  dplyr::mutate(MeanScaledExpression = mean(ScaledExpression)) %>%
+  dplyr::ungroup()
+
+cnt_infection_merged <- merge(cnt_infection_scaled_long, cnt_infection_percentages, by="condition_Symbol") %>%
+  dplyr::select(MeanScaledExpression, identity, condition, Symbol, condition_Symbol, pct_expressed) %>%
+  dplyr::distinct()
+
+cnt_interaction <- subset(cnt, rownames(cnt) %in% interaction_genes)
+
+cnt_interaction_temp <- reshape2::melt(as.matrix(cnt_interaction), value.name = "Expression", varnames = c("Symbol", "CellName"))
+cnt_interaction <- merge(cnt_interaction_temp, coldata, by="CellName")
+cnt_interaction <- cnt_interaction %>% 
+  dplyr::mutate(condition_Symbol = paste0(condition, "_", Symbol)) %>%
+  dplyr::group_by(condition_Symbol) %>%
+  dplyr::mutate(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup()
+
+cnt_interaction_percentages <- cnt_interaction %>%
+  dplyr::mutate(condition_Symbol = paste0(condition, "_", Symbol)) %>%
+  dplyr::group_by(condition_Symbol) %>%
+  dplyr::summarise(
+    nonzero_count_cells = sum(Expression != 0),
+    total_count_cells = n()
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(pct_expressed = (nonzero_count_cells*100)/total_count_cells)
+
+cnt_interaction_merged <- merge(cnt_interaction, cnt_interaction_percentages, by="condition_Symbol") %>%
+  dplyr::select(MeanExpression, identity, condition, Symbol, condition_Symbol, pct_expressed) %>%
+  dplyr::distinct()
+
+```
+
+```{r}
+# Define the bolder pastel colors
+stage_colors <- c("uninfected_adult" = "#A9A9A9",
+                  "early" = "#FFA07A",
+                  "peak" = "#FF6347",
+                  "repair" = "#77DD77")
+```
+
+```{r}
+ggplot(cnt_infection_merged, aes(x=condition, y=Symbol))+
+  geom_count(aes(size=pct_expressed, color=MeanScaledExpression))+
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red", 
+    midpoint = 0, 
+    name = "Mean Scaled Expression"
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Condition",
+    y = "Symbol",
+    size = "Percent Expressed"
+  ) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
 ```
 
 ```{r}
@@ -94,29 +209,6 @@ ggplot(data = representation_long, aes(x = value, y = fct_rev(identity), fill = 
   ) +
   labs(fill = "Infection Stage")  # Label for the legend
 dev.off()
-```
-
-```{r}
-marker_genes_df <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_Markers.xlsx")
-marker_genes_temp <- marker_genes_df %>%
-  dplyr::arrange(desc(f_statistic)) %>%
-  head(n=100) %>%
-  dplyr::pull(Symbol)
-marker_genes <- c(marker_genes_temp, "Cd81", "Hand1", "Ccl11", "Cd55")
-
-uninfected_cells_df <- coldata %>%
-  subset(stage_grouped == "uninfected_adult")
-
-uninfected_cells_df$identity <- factor(uninfected_cells_df$identity, levels=unique(representation$identity))
-
-# Sort the dataframe by the factor levels
-uninfected_cells_df <- uninfected_cells_df %>%
-  arrange(identity)
-
-uninfected_cells <- uninfected_cells_df$CellName
-
-cnt_markers <- subset(cnt, rownames(cnt) %in% marker_genes)
-cnt_markers <- cnt_markers %>% dplyr::select(all_of(uninfected_cells))
 ```
 
 ```{r}
