@@ -18,6 +18,9 @@ cnt <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Cluster
 
 #Determine the protein coding genes using the feature table from the same reference genome that was used for alignment
 genomic_features <- read.csv("/vol/ExtraVol/Genomic_Features.tsv", row.names = NULL, sep="\t")
+genomic_features_unique <- genomic_features %>%
+  dplyr::select(c(Symbol, Name)) %>%
+  dplyr::distinct()
 protein_coding_genes <- unique(subset(genomic_features, Gene.Type == "protein-coding")$Symbol)
 
 #This is to add full names of the genes to the results
@@ -52,7 +55,7 @@ gc()
 ```
 
 ```{r}
-coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
+coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
 rownames(coldata) <- coldata$CellName
 
 #We have two leiden clusters of Adamdec1+ cells. We want to group them together for DEX analysis. We also have two samples of uninfected cells. We should group them too.
@@ -104,10 +107,79 @@ unique(colnames(cnt) == rownames(coldata))
 cnt <- as.matrix(cnt)
 gc()
 
-#coldata_subset <- subset(coldata, identity %in% c("Pericytes", "Ccl11+ MF"))
-#cnt_subset <- cnt[, coldata_subset$CellName]
-#rm(coldata_subset, cnt_subset)
+coldata_subset <- subset(coldata, stage_grouped == "uninfected_adult")
+coldata_subset <- coldata_subset %>% dplyr::mutate(identity_trimmed = str_replace(identity, " FB| MF", ""))
+cnt_subset <- cnt[, coldata_subset$CellName]
 
+# Modify identity names to remove spaces and replace + with "pos" and - with "neg"
+coldata_subset <- coldata_subset %>%
+  mutate(identity = gsub("\\+", "pos", identity)) %>%
+  mutate(identity = gsub("\\-", "neg", identity)) %>%
+  mutate(identity = gsub("\\s+", "", identity))
+
+# One-hot encode the identity column
+coldata_wide <- coldata_subset %>%
+  mutate(id = row_number()) %>%
+  pivot_wider(names_from = identity, values_from = identity, values_fill = list(identity = "B"), values_fn = list(identity = ~ "A")) %>%
+  select(-id)
+
+
+rownames(coldata_wide) <- coldata_wide$CellName
+
+unique(colnames(cnt) == rownames(coldata))
+unique(colnames(cnt_subset) == rownames(coldata_wide))
+
+# Extract the identity column names
+identity_columns <- colnames(coldata_wide)[!colnames(coldata_wide) %in% colnames(coldata)]
+
+# Loop over each identity for "one versus rest" comparison
+for (identity_col in identity_columns) {
+  # Subset coldata_wide for the current identity
+  coldata_subset <- coldata_wide %>% select(identity_col)
+  
+  # Fit the model with the updated design
+  fit_markers <- glm_gp(cnt_subset,
+                        col_data = coldata_wide,
+                        design = as.formula(paste("~", identity_col)),
+                        size_factors = "deconvolution",
+                        subsample = FALSE,
+                        verbose = TRUE,
+                        on_disk = FALSE)
+  
+  # Create the contrast using cond() for one versus rest
+  contrast_formula <- paste0("cond(", identity_col, " = 'A') - cond(", identity_col, " = 'B')")
+  
+  # Perform the test_de function with the contrast formula
+  res <- test_de(fit_markers, contrast = eval(parse(text = contrast_formula)),
+                 max_lfc = 5,
+                 verbose = TRUE) %>%
+    dplyr::select(-c(df1, df2)) %>%
+    dplyr::rename("Symbol" = "name") %>%
+    merge(genomic_features_unique, by = "Symbol") %>%
+    dplyr::mutate(
+      pval = case_when(
+        pval == 0 ~ .Machine$double.xmin,
+        .default = pval),
+      adj_pval = case_when(
+        adj_pval == 0 ~ .Machine$double.xmin,
+        .default = adj_pval)) %>%
+    dplyr::mutate(signed_adj_pval = sign(lfc) * (-log10(adj_pval)),
+                  signed_f_statistic = sign(lfc) * (f_statistic)) %>%
+    dplyr::arrange(desc(signed_f_statistic))
+  
+  # Define the file name
+  file_name <- paste0("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults_", gsub("\\s+|\\+|\\-", "_", identity_col), ".xlsx")
+  
+  # Save the result to an Excel file
+  write.xlsx(res, file_name, overwrite = TRUE)
+  
+  # Print a message indicating completion of the current identity
+  message(paste("Completed and saved results for", identity_col, "to", file_name))
+}
+
+```
+
+```{r}
 fit <- glm_gp(cnt,
               col_data = coldata,
               design = ~1+identity+stage_grouped+identity:stage_grouped,
@@ -118,7 +190,7 @@ fit <- glm_gp(cnt,
 ```
 
 ```{r}
-saveRDS(fit, "/vol/ExtraVol/parasite_glmGamPoi_fit_full.RDS")
+saveRDS(fit, "/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_full.RDS")
 ```
 
 ```{r}

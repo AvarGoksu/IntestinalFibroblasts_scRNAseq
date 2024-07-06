@@ -58,10 +58,83 @@ identities <- unique(fit[["data"]]@colData@listData[["identity"]])
 infection_stages <- c("early", "peak", "repair")
 ```
 
+
+```{r}
+# res <- test_de(fit, contrast = cond(stage_grouped = "uninfected_adult", identity = "Cd81+ FB") -
+#                                (cond(stage_grouped = "uninfected_adult", identity = "PdgfraloCd55+ FB") + cond(stage_grouped = "uninfected_adult", identity = "Pdgfrahi FB")),
+#                max_lfc = 5,
+#                verbose = TRUE) %>%
+#   dplyr::select(-c(df1,df2)) %>%
+#   dplyr::rename("Symbol" = "name") %>%
+#   merge(genomic_features_unique, by="Symbol") %>%
+#   dplyr::mutate(
+#     pval = case_when(
+#     pval == 0 ~ .Machine$double.xmin,
+#     .default = pval),
+#     adj_pval = case_when(
+#     adj_pval == 0 ~ .Machine$double.xmin,
+#     .default = adj_pval)) %>%
+#   dplyr::mutate(signed_adj_pval = sign(lfc)*(-log10(adj_pval)),
+#                 signed_f_statistic = sign(lfc)*(f_statistic)) %>%
+#   dplyr::arrange(desc(signed_f_statistic))
+```
+
+
+```{r}
+# Initialize an empty list to store the results
+results_list <- list()
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Loop over the first two identities
+for (i in 1:2) { # Adjust this to 3:4 for the next two identities and so on
+  # Define the current identity to compare against the rest
+  current_identity <- identities[i]
+  
+  # Define the rest of the identities
+  other_identities <- identities[-i]
+  
+  # Construct the contrast dynamically
+  contrast <- paste0("cond(stage_grouped = 'uninfected_adult', identity = '", current_identity, "') - (", 
+                     paste0("cond(stage_grouped = 'uninfected_adult', identity = '", other_identities, "')", collapse = " + "), 
+                     ")")
+  
+  # Perform the test_de function and subsequent operations
+  res <- test_de(fit, contrast = eval(parse(text = contrast)),
+                 max_lfc = 5,
+                 verbose = TRUE) %>%
+    dplyr::select(-c(df1, df2)) %>%
+    dplyr::rename("Symbol" = "name") %>%
+    merge(genomic_features_unique, by = "Symbol") %>%
+    dplyr::mutate(
+      pval = case_when(
+        pval == 0 ~ .Machine$double.xmin,
+        .default = pval),
+      adj_pval = case_when(
+        adj_pval == 0 ~ .Machine$double.xmin,
+        .default = adj_pval)) %>%
+    dplyr::mutate(signed_adj_pval = sign(lfc) * (-log10(adj_pval)),
+                  signed_f_statistic = sign(lfc) * (f_statistic)) %>%
+    dplyr::arrange(desc(signed_f_statistic))
+  
+  # Define the file name
+  file_name <- paste0("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults_", gsub("\\s+|\\+|\\-", "_", current_identity), ".xlsx")
+  
+  # Save the result to an Excel file
+  write.xlsx(res, file_name, overwrite = TRUE)
+  
+  # Print a message indicating completion of the current identity
+  message(paste("Completed and saved results for", current_identity, "to", file_name))
+}
+```
+
+
 ```{r}
 res <- test_de(fit, contrast = cond(stage_grouped = "early", identity = "Cd81+ FB") -
                                cond(stage_grouped = "uninfected_adult", identity = "Cd81+ FB"),
-               max_lfc = 5) %>%
+               max_lfc = 5,
+               verbose = TRUE) %>%
   dplyr::select(-c(df1,df2)) %>%
   dplyr::rename("Symbol" = "name") %>%
   merge(genomic_features_unique, by="Symbol") %>%
