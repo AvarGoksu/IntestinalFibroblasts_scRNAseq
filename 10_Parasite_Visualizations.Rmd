@@ -8,6 +8,8 @@ library(data.table)
 library(DESeq2)
 library(conflicted)
 library(openxlsx)
+library(readxl)
+library(tidyr)
 #library(clusterProfiler)
 library(ComplexHeatmap)
 library(circlize)
@@ -16,13 +18,18 @@ library(RColorBrewer)
 library(reshape2)
 options("print.matrix" = FALSE)
 ```
+
 ```{r}
 coldata <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_Metadata.csv")) %>% dplyr::select(CellName, identity, stage, stage_grouped)
 rownames(coldata) <- coldata$CellName
 
 #We have two leiden clusters of Adamdec1+ cells. We want to group them together for DEX analysis. We also have two samples of uninfected cells. We should group them too.
 coldata <- coldata %>%
-  dplyr::mutate(condition = paste0(identity, "_", stage_grouped))
+  dplyr::mutate(condition = paste0(identity, "_", stage_grouped)) %>%
+  mutate(identity_simplified = gsub("\\+", "pos", identity)) %>%
+  mutate(identity_simplified = gsub("\\-", "neg", identity_simplified)) %>%
+  mutate(identity_simplified = gsub("\\s+", "", identity_simplified))
+
 ```
 
 ```{r}
@@ -33,18 +40,18 @@ cnt <- as.data.frame(t(cnt))
 ```
 
 ```{r}
-representation <- dplyr::select(coldata, c(CellName, identity, stage_grouped)) %>%
-  dplyr::group_by(identity, stage_grouped) %>%
+representation <- dplyr::select(coldata, c(CellName, identity_simplified, stage_grouped)) %>%
+  dplyr::group_by(identity_simplified, stage_grouped) %>%
   dplyr::summarise(n_cells = n()) %>%
   dplyr::ungroup() %>%
-  dplyr::group_by(identity) %>%
+  dplyr::group_by(identity_simplified) %>%
   dplyr::mutate(pct_cells = (n_cells*100)/sum(n_cells),
                 n_cells_total = sum(n_cells)) %>%
   dplyr::ungroup() %>%
   dplyr::arrange(desc(n_cells_total))
 
 representation$stage_grouped <- factor(representation$stage_grouped, levels=c("uninfected_adult", "early", "peak", "repair"))
-representation$identity <- factor(representation$identity, levels=unique(representation$identity))
+representation$identity_simplified <- factor(representation$identity_simplified, levels=unique(representation$identity_simplified))
 
 # Combine the data for both plots
 representation_long <- representation %>%
@@ -52,6 +59,322 @@ representation_long <- representation %>%
 representation_long$measure <- factor(representation_long$measure, levels = c("pct_cells","n_cells_total"))
 representation_long$stage_grouped <- fct_rev(factor(representation_long$stage_grouped, levels=c("uninfected_adult", "early", "peak", "repair")))
 ```
+
+### CALCULATING PERCENTAGE OF CELLS THAT EXPRESS THE MARKERS. RUN THIS ONLY ONCE, THEN READ THE OUTPUT. ###
+
+```{r}
+# # Read the Excel file
+# file_path <- "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults.xlsx"
+# sheet_names <- excel_sheets(file_path)
+# 
+# # Load each sheet as a separate data frame
+# data_frames <- lapply(sheet_names, function(sheet) {
+#   read_excel(file_path, sheet = sheet)
+# })
+# names(data_frames) <- sheet_names
+# 
+# # Initialize a list to store the results
+# results <- list()
+# 
+# # Process each data frame
+# for (sheet_name in sheet_names) {
+#   # Get the corresponding data frame
+#   df <- data_frames[[sheet_name]]
+#   
+#   # Subset coldata for the given identity_simplified
+#   subset_coldata <- subset(coldata, identity_simplified == sheet_name & 
+#                              stage_grouped == "uninfected_adult") 
+#   subset_cells <- subset_coldata %>%
+#     dplyr::pull(CellName)
+#   
+#   # Subset the cnt matrix to keep only the cells for the given identity
+#   subset_cnt <- cnt[, subset_cells]
+#   
+#   # Calculate the percentage of cells with non-zero counts for each gene
+#   gene_counts <- apply(subset_cnt, 1, function(row) {
+#     sum(row > 0) / length(row) * 100
+#   })
+#   
+#   # Store the result
+#   results[[sheet_name]] <- data.frame(Symbol = rownames(subset_cnt), Percentage = gene_counts)
+# }
+# 
+# # Print the results for verification
+# print(results)
+```
+
+```{r}
+# # Initialize a list to store the merged data frames
+# merged_data_frames <- list()
+# 
+# # Merge corresponding data frames by the "Symbol" column
+# for (sheet_name in sheet_names) {
+#   df1 <- data_frames[[sheet_name]]
+#   df2 <- results[[sheet_name]]
+#   
+#   # Perform the merge
+#   merged_df <- df1 %>%
+#     inner_join(df2, by = "Symbol")
+#   
+#   # Store the merged data frame
+#   merged_data_frames[[sheet_name]] <- merged_df
+# }
+```
+
+```{r}
+# # Create a new workbook
+# wb <- createWorkbook()
+# 
+# # Add each merged data frame as a separate sheet
+# for (sheet_name in names(merged_data_frames)) {
+#   addWorksheet(wb, sheet_name)
+#   
+#   # Write the data
+#   writeData(wb, sheet = sheet_name, merged_data_frames[[sheet_name]])
+# }
+# 
+# # Save the workbook
+# saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults_withPercentages.xlsx", overwrite = TRUE)
+```
+
+### END OF MARKER PERCENTAGE CALCULATION ###
+
+```{r}
+# Read the Excel file
+file_path <- "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults_withPercentages.xlsx"
+sheet_names <- excel_sheets(file_path)
+
+# Load each sheet as a separate data frame
+data_frames <- lapply(sheet_names, function(sheet) {
+  read_excel(file_path, sheet = sheet)
+})
+names(data_frames) <- sheet_names
+```
+
+```{r}
+# Initialize an empty vector to store the marker genes
+markers <- c()
+
+# Loop over each sheet name to process the corresponding data frame
+for (sheet_name in sheet_names) {
+  # Merge the corresponding data frames by the "Symbol" column
+  df <- data_frames[[sheet_name]]
+  
+  # Filter genes by percentage expression and select the top marker genes
+  top_markers <- df %>%
+    subset(Percentage > 10 & !Symbol %in% markers) %>%  # Filter for genes with >10% non-zero expression
+    dplyr::arrange(desc(signed_f_statistic)) %>%  # Sort by signed F-statistic
+    head(10) %>%  # Select the top 10 marker genes
+    dplyr::pull(Symbol)  # Extract the "Symbol" column
+  
+  # Append the marker genes to the vector
+  markers <- c(markers, top_markers)
+}
+
+markers <- factor(markers, levels = markers)
+sheet_names <- factor(sheet_names, levels = sheet_names)
+
+# Print the markers vector for verification
+print(markers)
+```
+
+```{r}
+genes_list <- c("Pdpn", "Pdgfra", "Igfbp3", "Fgfr2", "Pdgfrb", "Des", "Acta2", "Myh11", "Actg2", "Cd81", "Ackr4", "Cd55", "Cd34", "Jam2", "Ccl11", "Kit", "Hand1")
+
+uninfected_cells_df <- coldata %>%
+  subset(stage_grouped == "uninfected_adult")
+
+uninfected_cells_df$identity_simplified <- factor(uninfected_cells_df$identity_simplified, levels=unique(representation$identity_simplified))
+
+# Sort the dataframe by the factor levels
+uninfected_cells_df <- uninfected_cells_df %>%
+  arrange(identity_simplified)
+
+uninfected_cells <- uninfected_cells_df$CellName
+
+cnt_markers <- subset(cnt, rownames(cnt) %in% genes_list)
+cnt_markers <- cnt_markers %>% dplyr::select(all_of(uninfected_cells))
+
+cnt_markers_temp <- reshape2::melt(as.matrix(cnt_markers), value.name = "Expression", varnames = c("Symbol", "CellName"))
+cnt_markers_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::mutate(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup()
+
+cnt_markers_percentages <- cnt_markers_long %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarise(
+    nonzero_count_cells = sum(Expression != 0),
+    total_count_cells = n()
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(pct_expressed = (nonzero_count_cells*100)/total_count_cells)
+
+cnt_markers_scaled <- t(scale(t(cnt_markers), scale=FALSE))
+cnt_markers_scaled_temp <- reshape2::melt(as.matrix(cnt_markers_scaled), value.name = "ScaledExpression", varnames = c("Symbol", "CellName"))
+cnt_markers_nonscaled_temp <- reshape2::melt(as.matrix(cnt_markers), value.name = "Expression", varnames = c("Symbol", "CellName"))
+
+cnt_markers_scaled_long <- merge(cnt_markers_scaled_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarize(MeanScaledExpression = mean(ScaledExpression),
+                   Symbol = dplyr::first(Symbol),
+                   identity_simplified = dplyr::first(identity_simplified)) %>%
+  dplyr::ungroup()
+
+cnt_markers_nonscaled_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarize(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup() 
+
+cnt_markers_merged_temp <- merge(cnt_markers_scaled_long, cnt_markers_percentages, by="identity_Symbol")
+cnt_markers_merged <- merge(cnt_markers_merged_temp, cnt_markers_nonscaled_long, by="identity_Symbol") %>%
+  dplyr::distinct()
+```
+
+```{r}
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity_simplified))+
+  geom_count(aes(size=pct_expressed, color=MeanScaledExpression))+
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red", 
+    midpoint = 0, 
+    name = "Scaled Mean Expression"
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Gene",
+    y = "Identity",
+    size = "Percent Expressed"
+  ) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+colors <- colorRamp2(c(0, 0.025 * max(cnt_markers_merged$MeanExpression), max(cnt_markers_merged$MeanExpression)),
+                     c("grey100", "#add8e6", "#000080"))
+cnt_markers_merged$identity_simplified <- factor(cnt_markers_merged$identity_simplified, levels = rev(sheet_names))
+
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity_simplified))+
+  geom_count(aes(size=pct_expressed, color=MeanExpression))+
+  theme_minimal() +
+  labs(
+    x = "Gene",
+    y = "Identity",
+    size = "Percent Expressed"
+  ) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank()   # Remove minor grid lines
+  ) +
+  scale_color_gradientn(colors = colors(seq(0, max(cnt_markers_merged$MeanExpression), length.out = 100)))
+```
+
+```{r}
+uninfected_cells_df <- coldata %>%
+  subset(stage_grouped == "uninfected_adult")
+
+uninfected_cells_df$identity <- factor(uninfected_cells_df$identity, levels=unique(representation$identity))
+
+# Sort the dataframe by the factor levels
+uninfected_cells_df <- uninfected_cells_df %>%
+  arrange(identity)
+
+uninfected_cells <- uninfected_cells_df$CellName
+
+cnt_markers <- subset(cnt, rownames(cnt) %in% markers)
+cnt_markers <- cnt_markers %>% dplyr::select(all_of(uninfected_cells))
+
+cnt_markers_temp <- reshape2::melt(as.matrix(cnt_markers), value.name = "Expression", varnames = c("Symbol", "CellName"))
+cnt_markers_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::mutate(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup()
+
+cnt_markers_percentages <- cnt_markers_long %>%
+  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarise(
+    nonzero_count_cells = sum(Expression != 0),
+    total_count_cells = n()
+  ) %>%
+  dplyr::ungroup() %>%
+  dplyr::mutate(pct_expressed = (nonzero_count_cells*100)/total_count_cells)
+
+cnt_markers_scaled <- t(scale(t(cnt_markers), scale=FALSE))
+cnt_markers_scaled_temp <- reshape2::melt(as.matrix(cnt_markers_scaled), value.name = "ScaledExpression", varnames = c("Symbol", "CellName"))
+cnt_markers_nonscaled_temp <- reshape2::melt(as.matrix(cnt_markers), value.name = "Expression", varnames = c("Symbol", "CellName"))
+
+
+cnt_markers_scaled_long <- merge(cnt_markers_scaled_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarize(MeanScaledExpression = mean(ScaledExpression),
+                   Symbol = dplyr::first(Symbol),
+                   identity = dplyr::first(identity)) %>%
+  dplyr::ungroup()
+
+cnt_markers_nonscaled_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
+  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::group_by(identity_Symbol) %>%
+  dplyr::summarize(MeanExpression = mean(Expression)) %>%
+  dplyr::ungroup() 
+
+cnt_markers_merged_temp <- merge(cnt_markers_scaled_long, cnt_markers_percentages, by="identity_Symbol")
+cnt_markers_merged <- merge(cnt_markers_merged_temp, cnt_markers_nonscaled_long, by="identity_Symbol") %>%
+  dplyr::distinct()
+```
+
+```{r}
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity))+
+  geom_count(aes(size=pct_expressed, color=MeanScaledExpression))+
+  scale_color_gradient2(
+    low = "blue", 
+    mid = "white", 
+    high = "red", 
+    midpoint = 0, 
+    name = "Scaled Mean Expression"
+  ) +
+  theme_minimal() +
+  labs(
+    x = "Gene",
+    y = "Identity",
+    size = "Percent Expressed"
+  ) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+colors <- colorRamp2(c(0, 0.025 * max(cnt_markers_merged$MeanExpression), max(cnt_markers_merged$MeanExpression)),
+                     c("grey100", "#add8e6", "#000080"))
+cnt_markers_merged$Symbol <- factor(cnt_markers_merged$Symbol, levels = markers)
+cnt_markers_merged$identity_simplified <- factor(cnt_markers_merged$identity_simplified, levels = sheet_names)
+
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity))+
+  geom_count(aes(size=pct_expressed, color=MeanExpression))+
+  theme_minimal() +
+  labs(
+    x = "Gene",
+    y = "Identity",
+    size = "Percent Expressed"
+  ) +
+  theme(
+    legend.position = "right",
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    panel.grid.major = element_blank(),  # Remove major grid lines
+    panel.grid.minor = element_blank()   # Remove minor grid lines
+  ) +
+  scale_color_gradientn(colors = colors(seq(0, max(cnt_markers_merged$MeanExpression), length.out = 100)))
+```
+
 
 ```{r}
 marker_genes_df <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_Markers.xlsx")
