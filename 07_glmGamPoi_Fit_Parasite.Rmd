@@ -12,6 +12,7 @@ library(tidyverse)
 #library(BiocParallel)
 library(openxlsx)
 #library(ggplot2)
+library(ggrepel)
 ```
 
 ```{r}
@@ -339,44 +340,6 @@ fit <- glm_gp(as.matrix(final_pseudobulk_df),
 
 ```{r}
 saveRDS(fit, "/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_pseudobulked.RDS")
-```
-
-```{r}
-res_interaction <- test_de(fit, reduced_design = ~1+identity_simplified+stage_grouped)
-
-res_interaction <- res_interaction %>%
-  dplyr::select(name, pval, adj_pval, f_statistic)
-  # dplyr::mutate(
-  #   pval = case_when(
-  #     pval == 0 ~ .Machine$double.xmin,
-  #     .default = pval),
-  #   adj_pval = case_when(
-  #   adj_pval == 0 ~ .Machine$double.xmin,
-  #   .default = adj_pval)
-  #   ) %>%
-
-res_interaction_merged <- merge(res_interaction, gene_metadata, by="name") %>% arrange(desc(f_statistic))
-
-write.xlsx(res_interaction_merged, "/vol/ExtraVol/DEX_results_parasite_interaction_pseudobulked.xlsx")
-```
-
-```{r}
-res_infection <- test_de(fit, reduced_design = ~1+identity_simplified)
-
-res_infection <- res_infection %>%
-  dplyr::select(name, pval, adj_pval, f_statistic)
-  # dplyr::mutate(
-  #   pval = case_when(
-  #     pval == 0 ~ .Machine$double.xmin,
-  #     .default = pval),
-  #   adj_pval = case_when(
-  #   adj_pval == 0 ~ .Machine$double.xmin,
-  #   .default = adj_pval)
-  #   ) %>%
-
-res_infection_merged <- merge(res_infection, gene_metadata, by="name") %>% arrange(desc(f_statistic))
-
-write.xlsx(res_infection_merged, "/vol/ExtraVol/DEX_results_parasite_infection_pseudobulked.xlsx")
 ```
 
 ### THE END ###
