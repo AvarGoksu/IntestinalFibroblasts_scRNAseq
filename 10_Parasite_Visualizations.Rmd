@@ -162,15 +162,17 @@ for (sheet_name in sheet_names) {
   
   # Filter genes by percentage expression and select the top marker genes
   top_markers <- df %>%
-    subset(Percentage > 10 & !Symbol %in% markers) %>%  # Filter for genes with >10% non-zero expression
+    subset(Percentage > 10) %>%  # Filter for genes with >10% non-zero expression
     dplyr::arrange(desc(signed_f_statistic)) %>%  # Sort by signed F-statistic
     head(10) %>%  # Select the top 10 marker genes
-    dplyr::pull(Symbol)  # Extract the "Symbol" column
+    dplyr::pull(Symbol) # Extract the "Symbol" column
+
   
   # Append the marker genes to the vector
   markers <- c(markers, top_markers)
 }
 
+markers <- unique(markers)
 markers <- factor(markers, levels = markers)
 sheet_names <- factor(sheet_names, levels = sheet_names)
 
@@ -280,11 +282,11 @@ ggplot(cnt_markers_merged, aes(x=Symbol, y=identity_simplified))+
 uninfected_cells_df <- coldata %>%
   subset(stage_grouped == "uninfected_adult")
 
-uninfected_cells_df$identity <- factor(uninfected_cells_df$identity, levels=unique(representation$identity))
+uninfected_cells_df$identity_simplified <- factor(uninfected_cells_df$identity_simplified, levels=unique(representation$identity_simplified))
 
 # Sort the dataframe by the factor levels
 uninfected_cells_df <- uninfected_cells_df %>%
-  arrange(identity)
+  arrange(identity_simplified)
 
 uninfected_cells <- uninfected_cells_df$CellName
 
@@ -293,13 +295,13 @@ cnt_markers <- cnt_markers %>% dplyr::select(all_of(uninfected_cells))
 
 cnt_markers_temp <- reshape2::melt(as.matrix(cnt_markers), value.name = "Expression", varnames = c("Symbol", "CellName"))
 cnt_markers_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
-  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
   dplyr::group_by(identity_Symbol) %>%
   dplyr::mutate(MeanExpression = mean(Expression)) %>%
   dplyr::ungroup()
 
 cnt_markers_percentages <- cnt_markers_long %>%
-  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
   dplyr::group_by(identity_Symbol) %>%
   dplyr::summarise(
     nonzero_count_cells = sum(Expression != 0),
@@ -314,15 +316,15 @@ cnt_markers_nonscaled_temp <- reshape2::melt(as.matrix(cnt_markers), value.name 
 
 
 cnt_markers_scaled_long <- merge(cnt_markers_scaled_temp, coldata, by="CellName") %>% 
-  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
   dplyr::group_by(identity_Symbol) %>%
   dplyr::summarize(MeanScaledExpression = mean(ScaledExpression),
                    Symbol = dplyr::first(Symbol),
-                   identity = dplyr::first(identity)) %>%
+                   identity_simplified = dplyr::first(identity_simplified)) %>%
   dplyr::ungroup()
 
 cnt_markers_nonscaled_long <- merge(cnt_markers_temp, coldata, by="CellName") %>% 
-  dplyr::mutate(identity_Symbol = paste0(identity, "_", Symbol)) %>%
+  dplyr::mutate(identity_Symbol = paste0(identity_simplified, "_", Symbol)) %>%
   dplyr::group_by(identity_Symbol) %>%
   dplyr::summarize(MeanExpression = mean(Expression)) %>%
   dplyr::ungroup() 
@@ -333,7 +335,7 @@ cnt_markers_merged <- merge(cnt_markers_merged_temp, cnt_markers_nonscaled_long,
 ```
 
 ```{r}
-ggplot(cnt_markers_merged, aes(x=Symbol, y=identity))+
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity_simplified))+
   geom_count(aes(size=pct_expressed, color=MeanScaledExpression))+
   scale_color_gradient2(
     low = "blue", 
@@ -356,9 +358,9 @@ ggplot(cnt_markers_merged, aes(x=Symbol, y=identity))+
 colors <- colorRamp2(c(0, 0.025 * max(cnt_markers_merged$MeanExpression), max(cnt_markers_merged$MeanExpression)),
                      c("grey100", "#add8e6", "#000080"))
 cnt_markers_merged$Symbol <- factor(cnt_markers_merged$Symbol, levels = markers)
-cnt_markers_merged$identity_simplified <- factor(cnt_markers_merged$identity_simplified, levels = sheet_names)
+cnt_markers_merged$identity_simplified <- factor(cnt_markers_merged$identity_simplified, levels = rev(sheet_names))
 
-ggplot(cnt_markers_merged, aes(x=Symbol, y=identity))+
+ggplot(cnt_markers_merged, aes(x=Symbol, y=identity_simplified))+
   geom_count(aes(size=pct_expressed, color=MeanExpression))+
   theme_minimal() +
   labs(

@@ -10,7 +10,7 @@ library(ggpubr)
 library(ggforce)
 library(reshape2)
 library(ggpubr)
-library(org.Hs.eg.db)
+library(org.Mm.eg.db)
 library(AnnotationDbi)
 library(enrichplot)
 library(clusterProfiler)
@@ -21,37 +21,112 @@ library(GSVA)
 ```
 
 ```{r}
-#Read the fitted glmGamPoi object
-fit <- readRDS("/vol/ExtraVol/glm_gp_object_parasite_pseudobulk.RDS")
+normalized_counts <- as.data.frame(readr::read_csv("/vol/ExtraVol/DataHistory/Parasite_Clustered_normalized.csv"))
+rownames(normalized_counts) <- normalized_counts$CellName
+normalized_counts <- normalized_counts %>% dplyr::select(-CellName)
+normalized_counts <- as.data.frame(t(normalized_counts))
 
-#Read the normalized count data for visualizations and downstream analyses
-normalized_counts <- as.data.frame(read_csv("/vol/ExtraVol/deseq2_normalized_counts_parasite_pseudobulk.tsv")) 
-rownames(normalized_counts) <- normalized_counts$...1
-normalized_counts <- normalized_counts %>% dplyr::select(-c(...1))
+#Read the genomic feature table
+genomic_features <- read.csv("/vol/ExtraVol/Genomic_Features.tsv", row.names = NULL, sep="\t")
+genomic_features_unique <- genomic_features %>%
+  dplyr::select(c(Symbol, Name)) %>%
+  dplyr::distinct()
+protein_coding_genes <- unique(subset(genomic_features, Gene.Type == "protein-coding")$Symbol)
 
-#Read the vst transformed count data for visualizations
-vsd <- as.data.frame(read_csv("/vol/ExtraVol/deseq2_vst_counts_parasite_pseudobulk.tsv")) 
-rownames(vsd) <- vsd$...1
-vsd <- vsd %>% dplyr::select(-c(...1))
+normalized_counts <- subset(normalized_counts, rownames(normalized_counts) %in% protein_coding_genes)
+
+#This is to add full names of the genes to the results
+gene_metadata <- dplyr::select(genomic_features, c(Name, Symbol)) %>% 
+  dplyr::rename("name" = "Symbol",
+                "open_name" = "Name") %>%
+  distinct()
+
+entrezid_mapper <- AnnotationDbi::select(org.Mm.eg.db, keys=keys(org.Mm.eg.db), columns = c("SYMBOL", "ENTREZID")) %>% dplyr::rename("Symbol" = "SYMBOL")
+
+normalized_counts_temp <- normalized_counts %>%
+  dplyr::mutate(Symbol = rownames(normalized_counts))
+normalized_counts_withENTREZID <- merge(normalized_counts_temp, entrezid_mapper, by="Symbol")
+rownames(normalized_counts_withENTREZID) <- normalized_counts_withENTREZID$ENTREZID
+normalized_counts_withENTREZID <- dplyr::select(normalized_counts_withENTREZID, -c(ENTREZID, Symbol))
+rm(normalized_counts_temp)
+
+infection_results_temp <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_MainInfectionResults.xlsx")
+infection_results_temp <- subset(infection_results_temp, !grepl("^Rps|^Rpl", Symbol))
+infection_results <- merge(infection_results_temp, entrezid_mapper, by="Symbol") %>%
+  dplyr::arrange(desc(f_statistic)) %>% 
+  mutate(rank = seq(from = (n() - 1) / 2, to = -(n() - 1) / 2, by = -1))
+top_infection_genes <- head(infection_results, n=nrow(infection_results)/100)$ENTREZID
+
+interaction_results_temp <- read.xlsx("/vol/ExtraVol/ParasiteDEX/ParasiteDEX_InteractionResults.xlsx")
+interaction_results_temp <- subset(interaction_results_temp, !grepl("^Rps|^Rpl", Symbol))
+interaction_results <- merge(interaction_results_temp, entrezid_mapper, by="Symbol") %>%
+  dplyr::arrange(desc(f_statistic)) %>% 
+  mutate(rank = seq(from = (n() - 1) / 2, to = -(n() - 1) / 2, by = -1))
+top_interaction_genes <- head(interaction_results, n=nrow(interaction_results)/100)$ENTREZID
+
+reactome <- msigdbr(species = "Mus musculus", category = "C2", subcategory = "CP:REACTOME") %>% dplyr::select(gs_name, entrez_gene)
+gobp <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "GO:BP") %>% dplyr::select(gs_name, entrez_gene)
+biocarta <- msigdbr(species = "Mus musculus", category = "C2", subcategory = "CP:BIOCARTA") %>% dplyr::select(gs_name, entrez_gene)
 ```
 
 ```{r}
-reactome_genesets <- msigdbr(species = "Mus musculus", 
-                             category = "C2", 
-                             subcategory = "CP:REACTOME") %>% 
-  dplyr::select(gs_name, gene_symbol) %>% distinct()
+enrichment_gobp_interaction <- enricher(top_interaction_genes, 
+                            TERM2GENE = gobp, 
+                            pvalueCutoff=0.01,
+                            universe = interaction_results$ENTREZID)
+enrichment_gobp_interaction <- setReadable(enrichment_gobp_interaction, 'org.Mm.eg.db', "ENTREZID")
 
-reactome_genesets_subset <- reactome_genesets %>% 
+enrichment_gobp_infection <- enricher(top_infection_genes, 
+                            TERM2GENE = gobp, 
+                            pvalueCutoff=0.01,
+                            universe = infection_results$ENTREZID)
+enrichment_gobp_infection <- setReadable(enrichment_gobp_infection, 'org.Mm.eg.db', "ENTREZID")
+```
+
+```{r}
+enrichment_reactome_interaction <- enricher(top_interaction_genes, 
+                                TERM2GENE = reactome,
+                                pvalueCutoff=0.01,
+                                universe = interaction_results$ENTREZID)
+enrichment_reactome_interaction <- setReadable(enrichment_reactome_interaction, 'org.Mm.eg.db', "ENTREZID")
+
+enrichment_reactome_infection <- enricher(top_infection_genes, 
+                                TERM2GENE = reactome,
+                                pvalueCutoff=0.01,
+                                universe = infection_results$ENTREZID)
+enrichment_reactome_infection <- setReadable(enrichment_reactome_infection, 'org.Mm.eg.db', "ENTREZID")
+```
+
+```{r}
+infection_genes_ranked<-infection_results$rank
+names(infection_genes_ranked)<-infection_results$ENTREZID
+
+infection_GSEAobject <- GSEA(infection_genes_ranked, 
+                             TERM2GENE = reactome,
+                             eps = 0)
+
+infection_GSEAobject <- setReadable(infection_GSEAobject, 'org.Mm.eg.db', 'ENTREZID')
+enrich_WT_TNFvsUT <- enrich_WT_TNFvsUT_GSEAobject@result %>%
+  dplyr::mutate(signed_padj = sign(NES)*-log10(p.adjust)) %>%
+  dplyr::arrange(desc(signed_padj))
+```
+
+```{r}
+reactome_genesets_subset <- reactome %>% 
   subset(gs_name %in% c("REACTOME_DEGRADATION_OF_THE_EXTRACELLULAR_MATRIX",
+                        "REACTOME_COLLAGEN_FORMATION",
                         "REACTOME_CELLULAR_RESPONSE_TO_HEAT_STRESS",
-                        "REACTOME_ACTIVATION_OF_MATRIX_METALLOPROTEINASES",
-                        "REACTOME_ECM_PROTEOGLYCANS",
-                        "REACTOME_IMMUNOREGULATORY_INTERACTIONS_BETWEEN_A_LYMPHOID_AND_A_NON_LYMPHOID_CELL",
-                        "REACTOME_SIGNALING_BY_INTERLEUKINS"))
+                      "REACTOME_REGULATION_OF_INSULIN_LIKE_GROWTH_FACTOR_IGF_TRANSPORT_AND_UPTAKE_BY_INSULIN_LIKE_GROWTH_FACTOR_BINDING_PROTEINS_IGFBPS",
+                      "REACTOME_ANTIGEN_PROCESSING_CROSS_PRESENTATION"))
 
 reactome_list <- unlist(split(reactome_genesets_subset, 
                               f = reactome_genesets_subset$gs_name), 
                         recursive = F)
+```
+
+```{r}
+gsva_object <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = reactome_list)
+gsva_res_reactome <- gsva(gsva_object, verbose=TRUE)
 ```
 
 ```{r}
