@@ -124,7 +124,7 @@ pseudobulk_samples <- list()
 for (i in unique(coldata_withsamplesize$condition)) {
   # Inner loop to iterate 5 times for each condition
   for (j in 1:10) {
-    # 5-fold subsample sizes were previously calculated in the subsample_size column
+    # 10-fold subsample sizes were previously calculated in the subsample_size column
     i_subsample_size <- unique(subset(coldata_withsamplesize, condition == i)$subsample_size)
     # Retrieve all the sample IDs that correspond to the condition
     i_sample_pool <- subset(coldata_withsamplesize, condition == i)$CellName

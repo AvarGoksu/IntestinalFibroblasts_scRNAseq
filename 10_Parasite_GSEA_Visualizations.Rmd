@@ -1,0 +1,431 @@
+```{r}
+rm(list = ls())
+```
+
+
+```{r}
+library(openxlsx)
+library(tidyverse)
+library(ggpubr)
+library(ggforce)
+library(reshape2)
+library(ggpubr)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(enrichplot)
+library(clusterProfiler)
+library(msigdbr)
+library(forcats)
+library(ggrepel)
+library(GSVA)
+library(SingleCellExperiment)
+library(scran)
+library(ReactomePA)
+library(broom)
+```
+
+```{r}
+fit <- readRDS("/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_pseudobulked.RDS")
+cnt <- fit[["data"]]@assays@data@listData[["counts"]]
+sce <- SingleCellExperiment(assays = list(counts = cnt))
+sce <- computeSumFactors(sce)
+sce <- logNormCounts(sce)
+normalized_counts <- logcounts(sce)
+
+#Read the genomic feature table
+genomic_features <- read.csv("/vol/ExtraVol/Genomic_Features.tsv", row.names = NULL, sep="\t")
+genomic_features_unique <- genomic_features %>%
+  dplyr::select(c(Symbol, Name)) %>%
+  dplyr::distinct()
+protein_coding_genes <- unique(subset(genomic_features, Gene.Type == "protein-coding")$Symbol)
+
+normalized_counts <- subset(normalized_counts, rownames(normalized_counts) %in% protein_coding_genes)
+
+#This is to add full names of the genes to the results
+gene_metadata <- dplyr::select(genomic_features, c(Name, Symbol)) %>% 
+  dplyr::rename("name" = "Symbol",
+                "open_name" = "Name") %>%
+  distinct()
+
+entrezid_mapper <- AnnotationDbi::select(org.Mm.eg.db, keys=keys(org.Mm.eg.db), columns = c("SYMBOL", "ENTREZID")) %>% dplyr::rename("Symbol" = "SYMBOL")
+
+normalized_counts_temp <- as.data.frame(normalized_counts) %>%
+  dplyr::mutate(Symbol = rownames(normalized_counts))
+normalized_counts_withENTREZID <- merge(normalized_counts_temp, entrezid_mapper, by="Symbol")
+rownames(normalized_counts_withENTREZID) <- normalized_counts_withENTREZID$ENTREZID
+normalized_counts_withENTREZID <- dplyr::select(normalized_counts_withENTREZID, -c(ENTREZID, Symbol))
+rm(normalized_counts_temp)
+```
+
+### Read the GSEA results ###
+
+```{r}
+enrichment_reactome_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection.RDS")
+enrichment_reactome_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection_list.xlsx")
+
+enrichment_gobp_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection.RDS")
+enrichment_gobp_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection_list.xlsx")
+```
+
+```{r}
+reactome_gson <- gson_Reactome("mouse")
+gobp_gson <- gson_GO(OrgDb = "org.Mm.eg.db", ont = "BP")
+gomf_gson <- gson_GO(OrgDb = "org.Mm.eg.db", ont = "MF")
+```
+
+```{r}
+gsid2gene <- reactome_gson@gsid2gene
+gsid2name <- reactome_gson@gsid2name
+reactome_temp <- merge(gsid2gene, gsid2name, by="gsid")
+
+gsid2gene <- gobp_gson@gsid2gene
+gsid2name <- gobp_gson@gsid2name
+gobp <- merge(gsid2gene, gsid2name, by="gsid")
+
+gsid2gene <- gomf_gson@gsid2gene
+gsid2name <- gomf_gson@gsid2name
+gomf <- merge(gsid2gene, gsid2name, by="gsid")
+```
+
+```{r}
+genelist_df <- read.xlsx("/vol/ExtraVol/in_vitro_DEGs_IL-13_vs_ust_fitted values_FC1_p0.05.xlsx")
+
+IL13custom_UP <- subset(genelist_df, log2FC > 0) %>%
+  dplyr::select(X1) %>%
+  dplyr::rename("gene" = X1) %>%
+  dplyr::mutate("name" = "IL13custom_UP",
+                "gsid" = "CUSTOM",
+                gene = as.character(gene))
+
+IL13custom_DOWN <- subset(genelist_df, log2FC < 0) %>%
+  dplyr::select(X1) %>%
+  dplyr::rename("gene" = X1) %>%
+  dplyr::mutate("name" = "IL13custom_DOWN",
+                "gsid" = "CUSTOM",
+                gene = as.character(gene))
+
+IL13custom <- bind_rows(IL13custom_UP, IL13custom_DOWN)
+
+reactome <- bind_rows(reactome_temp, IL13custom)
+```
+
+```{r}
+# reactome_genesets_subset <- reactome %>% 
+#   subset(name %in% c("ECM proteoglycans",
+#                      "Degradation of the extracellular matrix",
+#                      "Attenuation phase",
+#                      "NF-kB is activated and signals survival",
+#                      "Integrin cell surface interactions",
+#                      "Extracellular matrix organization",
+#                      "IL13custom_UP",
+#                      "IL13custom_DOWN"))
+
+reactome_list <- unlist(split(reactome, 
+                              f = reactome$name), 
+                        recursive = F)
+
+gobp_list <- unlist(split(gobp, 
+                              f = gobp$name), 
+                        recursive = F)
+
+gomf_list <- unlist(split(gomf, 
+                              f = gomf$name), 
+                        recursive = F)
+```
+
+```{r}
+gsva_object_reactome <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = reactome_list, minSize = 10)
+gsva_res_reactome <- gsva(gsva_object_reactome, verbose=TRUE)
+
+gsva_object_gobp <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = gobp_list, minSize = 10)
+gsva_res_gobp <- gsva(gsva_object_gobp, verbose=TRUE)
+
+gsva_object_gomf <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = gomf_list, minSize = 10)
+gsva_res_gomf <- gsva(gsva_object_gomf, verbose=TRUE)
+```
+### Functions to sort and annotate ###
+
+```{r}
+# Function to assign shorter group names based on keywords
+short_group_name <- function(x) {
+  case_when(
+    str_detect(x, "uninfected") ~ "uninfected",
+    str_detect(x, "early") ~ "early",
+    str_detect(x, "peak") ~ "peak",
+    str_detect(x, "repair") ~ "repair",
+    TRUE ~ "other"
+  )
+}
+
+# Function to create an ordering factor
+ordering_factor <- function(x) {
+  case_when(
+    str_detect(x, "uninfected") ~ "1_uninfected",
+    str_detect(x, "early") ~ "2_early",
+    str_detect(x, "peak") ~ "3_peak",
+    str_detect(x, "repair") ~ "4_repair",
+    TRUE ~ "5_other"
+  )
+}
+
+# Define group colors
+group_colors <- c(
+  "uninfected" = "#6baed6",  # Darker Pastel Blue
+  "early" = "#fd8d3c",       # Darker Pastel Orange
+  "peak" = "#fb6a4a",        # Darker Pastel Red
+  "repair" = "#74c476"       # Darker Pastel Green
+)
+
+# Define the order of PlotGroup levels
+plot_group_levels <- c("uninfected", "early", "peak", "repair")
+
+# Function to sanitize filenames
+sanitize_filename <- function(filename) {
+  # Replace spaces with underscores and remove other special characters
+  gsub("[^A-Za-z0-9_]", "", gsub(" ", "_", filename))
+}
+```
+
+### Prepare GSVA result data frames for visualization ###
+
+```{r}
+### Prepare Reactome results ###
+
+gsva_res_reactome_melted <- reshape2::melt(gsva_res_reactome, 
+                                           varnames=c('GeneSet', 'SampleName'),
+                                           value.name = "GSVAscore") %>%
+  dplyr::mutate(SampleGroup = str_remove_all(SampleName, '_Rep.+'),
+                GeneSet = str_remove_all(GeneSet, ".gene"),
+                GeneSet = str_remove_all(GeneSet, "REACTOME_"),
+                PlotGroup = short_group_name(SampleGroup),
+                identity_simplified = str_extract(SampleGroup, "^[^_]+"))
+
+# Add the ordering factor to the dataframe
+gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
+  mutate(OrderFactor = ordering_factor(SampleGroup),
+         SampleGroup = factor(SampleGroup, levels = unique(SampleGroup[order(OrderFactor)])))
+
+# Optionally, you can remove the OrderFactor column if it's no longer needed
+gsva_res_reactome_melted <- dplyr::select(gsva_res_reactome_melted, -OrderFactor)
+
+
+### Prepare GOBP results ###
+
+gsva_res_gobp_melted <- reshape2::melt(gsva_res_gobp, 
+                                           varnames=c('GeneSet', 'SampleName'),
+                                           value.name = "GSVAscore") %>%
+  dplyr::mutate(SampleGroup = str_remove_all(SampleName, '_Rep.+'),
+                GeneSet = str_remove_all(GeneSet, ".gene"),
+                PlotGroup = short_group_name(SampleGroup),
+                identity_simplified = str_extract(SampleGroup, "^[^_]+"))
+
+# Add the ordering factor to the dataframe
+gsva_res_gobp_melted <- gsva_res_gobp_melted %>%
+  mutate(OrderFactor = ordering_factor(SampleGroup),
+         SampleGroup = factor(SampleGroup, levels = unique(SampleGroup[order(OrderFactor)])))
+
+# Optionally, you can remove the OrderFactor column if it's no longer needed
+gsva_res_gobp_melted <- dplyr::select(gsva_res_gobp_melted, -OrderFactor)
+
+
+### Prepare GOMF results ###
+
+gsva_res_gomf_melted <- reshape2::melt(gsva_res_gomf, 
+                                           varnames=c('GeneSet', 'SampleName'),
+                                           value.name = "GSVAscore") %>%
+  dplyr::mutate(SampleGroup = str_remove_all(SampleName, '_Rep.+'),
+                GeneSet = str_remove_all(GeneSet, ".gene"),
+                PlotGroup = short_group_name(SampleGroup),
+                identity_simplified = str_extract(SampleGroup, "^[^_]+"))
+
+# Add the ordering factor to the dataframe
+gsva_res_gomf_melted <- gsva_res_gomf_melted %>%
+  mutate(OrderFactor = ordering_factor(SampleGroup),
+         SampleGroup = factor(SampleGroup, levels = unique(SampleGroup[order(OrderFactor)])))
+
+# Optionally, you can remove the OrderFactor column if it's no longer needed
+gsva_res_gomf_melted <- dplyr::select(gsva_res_gomf_melted, -OrderFactor)
+
+```
+
+### ANOVA ###
+
+```{r}
+
+### Reactome ###
+
+# Perform the two-way ANOVA analysis and add the statistics to the data frame
+anova_results <- gsva_res_reactome_melted %>%
+  group_by(GeneSet) %>%
+  do({
+    # Perform two-way ANOVA
+    aov_result <- aov(GSVAscore ~ identity_simplified * PlotGroup, data = .)
+    
+    # Tidy the ANOVA result to get detailed statistics
+    aov_tidy <- tidy(aov_result)
+    
+    # Extract p-values for main effects and interaction
+    p_value_identity <- aov_tidy %>% filter(term == "identity_simplified") %>% pull(p.value)
+    p_value_sample <- aov_tidy %>% filter(term == "PlotGroup") %>% pull(p.value)
+    p_value_interaction <- aov_tidy %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
+    
+    # Create a data frame with these p-values for each combination of GeneSet and identity_simplified
+    distinct(., identity_simplified) %>%
+      mutate(p_value_identity = p_value_identity,
+             p_value_sample = p_value_sample,
+             p_value_interaction = p_value_interaction)
+  }) %>%
+  ungroup()
+
+# Join the p-values back to the original data frame
+gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
+  left_join(anova_results, by = c("GeneSet", "identity_simplified"))
+
+gsva_reactome_anova_top <- gsva_res_reactome_melted %>%
+  dplyr::select(GeneSet, identity_simplified, p_value_identity, p_value_sample, p_value_interaction) %>%
+  dplyr::distinct()
+
+### GOBP ###
+
+# Perform the grouped ANOVA analysis and add the p-value to the data frame
+gsva_res_gobp_melted <- gsva_res_gobp_melted %>%
+  group_by(GeneSet, identity_simplified) %>%
+  do({
+    # Perform ANOVA
+    aov_result <- aov(GSVAscore ~ SampleGroup, data = .)
+    
+    # Tidy the ANOVA result to get detailed statistics
+    aov_tidy <- tidy(aov_result)
+    
+    # Extract the relevant statistics
+    p_value <- aov_tidy$p.value[1]
+    mse <- aov_tidy$meansq[2]  # Mean square error
+    df <- aov_tidy$df[2]  # Degrees of freedom for residuals
+    
+    # Add these statistics as columns
+    mutate(., p_value = p_value, mse = mse, df = df)
+  }) %>%
+  ungroup()
+
+
+gsva_gobp_anova_top <- gsva_res_gobp_melted %>%
+  dplyr::select(GeneSet, identity_simplified, p_value, mse) %>%
+  dplyr::distinct()
+
+### GOMF ###
+
+# Perform the grouped ANOVA analysis and add the p-value to the data frame
+gsva_res_gomf_melted <- gsva_res_gomf_melted %>%
+  group_by(GeneSet, identity_simplified) %>%
+  do({
+    # Perform ANOVA
+    aov_result <- aov(GSVAscore ~ SampleGroup, data = .)
+    
+    # Extract p-value from ANOVA result
+    p_value <- summary(aov_result)[[1]][["Pr(>F)"]][1]
+    
+    # Add p-value as a column
+    mutate(., p_value = p_value)
+  }) %>%
+  ungroup()
+
+gsva_gomf_anova_top <- gsva_res_gomf_melted %>%
+  dplyr::select(GeneSet, identity_simplified, p_value) %>%
+  dplyr::distinct()
+```
+
+```{r}
+
+```
+
+### GSVA PLOTS ###
+
+```{r}
+# Define unique gene sets
+gene_sets <- unique(gsva_res_reactome_melted$GeneSet)
+
+
+# Loop through each unique gene set
+for (gene_set in gene_sets) {
+  tryCatch({
+    # Subset the data for the current gene set
+    plotdata <- subset(gsva_res_reactome_melted, GeneSet == gene_set)
+    plotdata$PlotGroup <- factor(plotdata$PlotGroup, levels = plot_group_levels)
+    
+    # Calculate the mean GSVAscore for each PlotGroup and identity_simplified
+    mean_data <- plotdata %>%
+      group_by(identity_simplified, PlotGroup) %>%
+      summarize(mean_GSVAscore = mean(GSVAscore, na.rm = TRUE), .groups = 'drop')
+    
+    # Define the output file name, sanitized to remove problematic characters
+    output_file <- paste0("/vol/ExtraVol/ParasiteDEX/GSEA/GSVA_", sanitize_filename(gene_set), ".pdf")
+    
+    # Save the plot as a PDF
+    pdf(output_file, width = 2, height = 6)
+    print(
+      ggplot(plotdata, aes(y = GSVAscore, x = PlotGroup, color = PlotGroup)) +
+        geom_point() +
+        geom_line(data = mean_data, aes(y = mean_GSVAscore, group = 1), color = "black") +
+        scale_color_manual(values = group_colors) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+              axis.text.y = element_text(hjust = 1, size = 5),
+              strip.text = element_text(size = 4),
+              axis.title.x = element_blank(),
+              axis.title.y = element_text(size=10),
+              plot.title = element_text(size = 5)) +
+        facet_wrap(~identity_simplified, ncol = 2, nrow = 5) +
+        ggtitle(paste0(gene_set))+
+        guides(color = "none")  # Remove the legend
+    )
+    dev.off()
+  }, error = function(e) {
+    message("Error generating plot for gene set: ", gene_set)
+    message("Error message: ", e$message)
+    dev.off()
+  })
+}
+
+```
+
+```{r}
+plotdata <- subset(gsva_res_gobp_melted, GeneSet == "otic vesicle morphsis.gsid")
+plotdata$PlotGroup <- factor(plotdata$PlotGroup, levels = c("uninfected",
+                                                            "early",
+                                                            "peak",
+                                                            "repair"))
+# Calculate the median GSVAscore for each PlotGroup and identity_simplified
+mean_data <- plotdata %>%
+  group_by(identity_simplified, PlotGroup) %>%
+  summarize(mean_GSVAscore = mean(GSVAscore, na.rm = TRUE), .groups = 'drop')
+
+pdf("/vol/ExtraVol/ParasiteDEX/GSEA/GSVA_mock.pdf", width = 2, height = 6)
+ggplot(plotdata, aes(y = GSVAscore, x = PlotGroup, color = PlotGroup)) +
+  geom_point() +
+  geom_line(data = mean_data, aes(y = mean_GSVAscore, group = 1), color = "black") +
+  scale_color_manual(values = group_colors) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
+        strip.text = element_text(size = 4),
+        axis.title.x = element_blank()) +
+  facet_wrap(~identity_simplified, ncol = 2, nrow=5)+
+  guides(color = "none")  # Remove the legend
+dev.off()
+```
+
+```{r}
+ggplot(head(enrichment_reactome_infection_list,n=15), aes(x=GeneRatio, y=Description))+
+  geom_dotplot()
+```
+```{r}
+pdf("/vol/ExtraVol/ParasiteDEX/GSEA/dotplot_reactome.pdf", width=6, height = 7)
+dotplot(enrichment_reactome_infection, showCategory=15, font.size=5)
+dev.off()
+```
+
+```{r}
+pdf("/vol/ExtraVol/ParasiteDEX/GSEA/dotplot_gobp.pdf", width=6, height = 7)
+dotplot(enrichment_gobp_infection, showCategory=15, font.size=5)
+dev.off()
+```
+

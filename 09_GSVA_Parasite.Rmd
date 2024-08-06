@@ -20,6 +20,7 @@ library(ggrepel)
 library(GSVA)
 library(SingleCellExperiment)
 library(scran)
+library(ReactomePA)
 ```
 
 ```{r}
@@ -85,136 +86,34 @@ repair_infection_results <- merge(repair_infection_results_temp, entrezid_mapper
 
 reactome <- msigdbr(species = "Mus musculus", category = "C2", subcategory = "CP:REACTOME") %>% dplyr::select(gs_name, entrez_gene)
 gobp <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "GO:BP") %>% dplyr::select(gs_name, entrez_gene)
+gomf <- msigdbr(species = "Mus musculus", category = "C5", subcategory = "GO:MF") %>% dplyr::select(gs_name, entrez_gene)
 ```
 
 ```{r}
-enrichment_gobp_infection <- enricher(top_infection_genes, 
-                            TERM2GENE = gobp, 
-                            pvalueCutoff=0.01,
+enrichment_gobp_infection <- enrichGO(top_infection_genes, "org.Mm.eg.db",
+                            ont = "BP", 
+                            pvalueCutoff=0.05,
                             universe = infection_results$ENTREZID)
+enrichment_gobp_infection <- simplify(enrichment_gobp_infection, cutoff = 0.7, by = "p.adjust", select_fun = min)
 enrichment_gobp_infection <- setReadable(enrichment_gobp_infection, 'org.Mm.eg.db', "ENTREZID")
+enrichment_gobp_infection_list <- enrichment_gobp_infection@result %>%
+  arrange(p.adjust)
+saveRDS(enrichment_gobp_infection, "/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection.RDS")
+write.xlsx(enrichment_gobp_infection_list, "/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection_list.xlsx")
 ```
 
 ```{r}
-enrichment_reactome_infection <- enricher(top_infection_genes, 
-                                TERM2GENE = reactome,
-                                pvalueCutoff=0.01,
-                                universe = infection_results$ENTREZID)
-enrichment_reactome_infection <- setReadable(enrichment_reactome_infection, 'org.Mm.eg.db', "ENTREZID")
+enrichment_reactome_infection <- enrichPathway(top_infection_genes,
+                            organism = "mouse", 
+                            pvalueCutoff=0.05,
+                            universe = infection_results$ENTREZID,
+                            readable = TRUE)
+enrichment_reactome_infection_list <- enrichment_reactome_infection@result %>%
+  arrange(p.adjust)
+saveRDS(enrichment_reactome_infection, "/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection.RDS")
+write.xlsx(enrichment_reactome_infection_list, "/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection_list.xlsx")
 ```
 
-```{r}
-peak_infection_genes_ranked<-peak_infection_results$signed_adj_pval
-names(peak_infection_genes_ranked)<-peak_infection_results$ENTREZID
 
-peak_infection_GSEAobject <- GSEA(peak_infection_genes_ranked, 
-                             TERM2GENE = reactome,
-                             eps = 0)
 
-peak_infection_GSEAobject <- setReadable(peak_infection_GSEAobject, 'org.Mm.eg.db', 'ENTREZID')
-peak_infection_GSEAlist <- peak_infection_GSEAobject@result %>%
-  dplyr::mutate(signed_padj = sign(NES)*-log10(p.adjust)) %>%
-  dplyr::arrange(desc(signed_padj))
-```
-
-```{r}
-reactome_genesets_subset <- reactome %>% 
-  subset(gs_name %in% c("REACTOME_DEGRADATION_OF_THE_EXTRACELLULAR_MATRIX",
-                        "REACTOME_COLLAGEN_FORMATION",
-                        "REACTOME_CELLULAR_RESPONSE_TO_HEAT_STRESS",
-                      "REACTOME_ANTIGEN_PROCESSING_CROSS_PRESENTATION"))
-
-reactome_list <- unlist(split(reactome_genesets_subset, 
-                              f = reactome_genesets_subset$gs_name), 
-                        recursive = F)
-```
-
-```{r}
-gsva_object <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = reactome_list)
-gsva_res_reactome <- gsva(gsva_object, verbose=TRUE)
-```
-
-### GSVA PLOTS ###
-
-```{r}
-# Function to assign shorter group names based on keywords
-short_group_name <- function(x) {
-  case_when(
-    str_detect(x, "uninfected") ~ "uninfected",
-    str_detect(x, "early") ~ "early",
-    str_detect(x, "peak") ~ "peak",
-    str_detect(x, "repair") ~ "repair",
-    TRUE ~ "other"
-  )
-}
-
-gsva_res_reactome_melted <- reshape2::melt(gsva_res_reactome, 
-                                           varnames=c('GeneSet', 'SampleName'),
-                                           value.name = "GSVAscore") %>%
-  dplyr::mutate(SampleGroup = str_remove_all(SampleName, '_Rep.+'),
-                GeneSet = str_remove_all(GeneSet, ".entrez_gene"),
-                GeneSet = str_remove_all(GeneSet, "REACTOME_"),
-                PlotGroup = short_group_name(SampleGroup),
-                identity_simplified = str_extract(SampleGroup, "^[^_]+"))
-
-# Function to create an ordering factor
-ordering_factor <- function(x) {
-  case_when(
-    str_detect(x, "uninfected") ~ "1_uninfected",
-    str_detect(x, "early") ~ "2_early",
-    str_detect(x, "peak") ~ "3_peak",
-    str_detect(x, "repair") ~ "4_repair",
-    TRUE ~ "5_other"
-  )
-}
-
-# Add the ordering factor to the dataframe
-gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
-  mutate(OrderFactor = ordering_factor(SampleGroup),
-         SampleGroup = factor(SampleGroup, levels = unique(SampleGroup[order(OrderFactor)])))
-
-# Optionally, you can remove the OrderFactor column if it's no longer needed
-gsva_res_reactome_melted <- dplyr::select(gsva_res_reactome_melted, -OrderFactor)
-
-# Define group colors
-group_colors <- c(
-  "uninfected" = "#6baed6",  # Darker Pastel Blue
-  "early" = "#fd8d3c",       # Darker Pastel Orange
-  "peak" = "#fb6a4a",        # Darker Pastel Red
-  "repair" = "#74c476"       # Darker Pastel Green
-)
-```
-
-```{r}
-plotdata <- subset(gsva_res_reactome_melted, GeneSet == "ANTIGEN_PROCESSING_CROSS_PRESENTATION")
-plotdata$PlotGroup <- factor(plotdata$PlotGroup, levels = c("uninfected",
-                                                            "early",
-                                                            "peak",
-                                                            "repair"))
-# Calculate the median GSVAscore for each PlotGroup and identity_simplified
-median_data <- plotdata %>%
-  group_by(identity_simplified, PlotGroup) %>%
-  summarize(median_GSVAscore = median(GSVAscore, na.rm = TRUE), .groups = 'drop')
-
-pdf("/vol/ExtraVol/ParasiteDEX/GSEA/GSVA_AntigenProcessing.pdf", width = 2, height = 6)
-ggplot(plotdata, aes(y = GSVAscore, x = PlotGroup, color = PlotGroup)) +
-  geom_point() +
-  geom_line(data = median_data, aes(y = median_GSVAscore, group = 1), color = "black") +
-  scale_color_manual(values = group_colors) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 5),
-        strip.text = element_text(size = 4),
-        axis.title.x = element_blank()) +
-  facet_wrap(~identity_simplified, ncol = 2, nrow=5)+
-  guides(color = "none")  # Remove the legend
-dev.off()
-```
-
-```{r}
-ggplot(gsva_res_reactome_melted, aes(y=GSVAscore, x=SampleGroup))+
-  geom_point()+
-  theme_minimal()+
-  ggtitle(paste0(unique(gsva_res_reactome_melted$GeneSet)))
-  
-```
 
