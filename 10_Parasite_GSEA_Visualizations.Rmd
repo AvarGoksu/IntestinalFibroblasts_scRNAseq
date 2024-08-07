@@ -22,6 +22,8 @@ library(SingleCellExperiment)
 library(scran)
 library(ReactomePA)
 library(broom)
+library(multcomp)
+library(parallel)
 ```
 
 ```{r}
@@ -254,90 +256,99 @@ gsva_res_gomf_melted <- dplyr::select(gsva_res_gomf_melted, -OrderFactor)
 
 ### Reactome ###
 
-# Perform the two-way ANOVA analysis and add the statistics to the data frame
-anova_results <- gsva_res_reactome_melted %>%
+# Perform the two-way ANOVA analysis and summarize the results
+anova_results_twoway_reactome <- gsva_res_reactome_melted %>%
   group_by(GeneSet) %>%
-  do({
-    # Perform two-way ANOVA
-    aov_result <- aov(GSVAscore ~ identity_simplified * PlotGroup, data = .)
-    
-    # Tidy the ANOVA result to get detailed statistics
-    aov_tidy <- tidy(aov_result)
-    
-    # Extract p-values for main effects and interaction
-    p_value_identity <- aov_tidy %>% filter(term == "identity_simplified") %>% pull(p.value)
-    p_value_sample <- aov_tidy %>% filter(term == "PlotGroup") %>% pull(p.value)
-    p_value_interaction <- aov_tidy %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
-    
-    # Create a data frame with these p-values for each combination of GeneSet and identity_simplified
-    distinct(., identity_simplified) %>%
-      mutate(p_value_identity = p_value_identity,
-             p_value_sample = p_value_sample,
-             p_value_interaction = p_value_interaction)
-  }) %>%
-  ungroup()
+  summarize(
+    aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
+    p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
+    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
+  ) %>% 
+  rowwise() %>%
+  mutate(
+    tukey_result = list(glht(aov_result, linfct = mcp(identity_simplified = "Tukey"))),
+    tukey_tidy = list(tidy(summary(tukey_result))),
+    tukey_comparisons = list(tukey_tidy %>% 
+                              filter(grepl("identity_simplified", contrast)) %>%
+                              select(contrast, adj.p.value) %>%
+                              rename(comparison = contrast))
+  ) %>%
+  unnest(tukey_comparisons)
 
-# Join the p-values back to the original data frame
+# Perform the one-way ANOVA analysis and summarize the results
+anova_results_oneway_reactome <- gsva_res_reactome_melted %>%
+  group_by(GeneSet, identity_simplified) %>%
+  summarize(
+    aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
+    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+  ) %>%
+  select(-aov_result, -aov_tidy)
+
+anova_results_reactome <- merge(anova_results_twoway_reactome, anova_results_oneway_reactome, by="GeneSet")
+anova_results_reactome <- anova_results_reactome %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
+
 gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
-  left_join(anova_results, by = c("GeneSet", "identity_simplified"))
-
-gsva_reactome_anova_top <- gsva_res_reactome_melted %>%
-  dplyr::select(GeneSet, identity_simplified, p_value_identity, p_value_sample, p_value_interaction) %>%
-  dplyr::distinct()
+  mutate(identity_simplified = as.factor(identity_simplified),
+         PlotGroup = as.factor(PlotGroup))
 
 ### GOBP ###
 
-# Perform the grouped ANOVA analysis and add the p-value to the data frame
-gsva_res_gobp_melted <- gsva_res_gobp_melted %>%
+# Perform the two-way ANOVA analysis and summarize the results
+anova_results_twoway_gobp <- gsva_res_gobp_melted %>%
+  group_by(GeneSet) %>%
+  summarize(
+    aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
+    p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
+    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
+  ) %>%
+  select(-aov_result, -aov_tidy)
+
+# Perform the one-way ANOVA analysis and summarize the results
+anova_results_oneway_gobp <- gsva_res_gobp_melted %>%
   group_by(GeneSet, identity_simplified) %>%
-  do({
-    # Perform ANOVA
-    aov_result <- aov(GSVAscore ~ SampleGroup, data = .)
-    
-    # Tidy the ANOVA result to get detailed statistics
-    aov_tidy <- tidy(aov_result)
-    
-    # Extract the relevant statistics
-    p_value <- aov_tidy$p.value[1]
-    mse <- aov_tidy$meansq[2]  # Mean square error
-    df <- aov_tidy$df[2]  # Degrees of freedom for residuals
-    
-    # Add these statistics as columns
-    mutate(., p_value = p_value, mse = mse, df = df)
-  }) %>%
-  ungroup()
+  summarize(
+    aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
+    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+  ) %>%
+  select(-aov_result, -aov_tidy)
 
-
-gsva_gobp_anova_top <- gsva_res_gobp_melted %>%
-  dplyr::select(GeneSet, identity_simplified, p_value, mse) %>%
-  dplyr::distinct()
+anova_results_gobp <- merge(anova_results_twoway_gobp, anova_results_oneway_gobp, by="GeneSet")
+anova_results_gobp <- anova_results_gobp %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
 
 ### GOMF ###
 
-# Perform the grouped ANOVA analysis and add the p-value to the data frame
-gsva_res_gomf_melted <- gsva_res_gomf_melted %>%
+# Perform the two-way ANOVA analysis and summarize the results
+anova_results_twoway_gomf <- gsva_res_gomf_melted %>%
+  group_by(GeneSet) %>%
+  summarize(
+    aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
+    p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
+    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
+  ) %>%
+  select(-aov_result, -aov_tidy)
+
+# Perform the one-way ANOVA analysis and summarize the results
+anova_results_oneway_gomf <- gsva_res_gomf_melted %>%
   group_by(GeneSet, identity_simplified) %>%
-  do({
-    # Perform ANOVA
-    aov_result <- aov(GSVAscore ~ SampleGroup, data = .)
-    
-    # Extract p-value from ANOVA result
-    p_value <- summary(aov_result)[[1]][["Pr(>F)"]][1]
-    
-    # Add p-value as a column
-    mutate(., p_value = p_value)
-  }) %>%
-  ungroup()
+  summarize(
+    aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
+    aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
+    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+  ) %>%
+  select(-aov_result, -aov_tidy)
 
-gsva_gomf_anova_top <- gsva_res_gomf_melted %>%
-  dplyr::select(GeneSet, identity_simplified, p_value) %>%
-  dplyr::distinct()
-```
-
-```{r}
+anova_results_gomf <- merge(anova_results_twoway_gomf, anova_results_oneway_gomf, by="GeneSet")
+anova_results_gomf <- anova_results_gomf %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
 
 ```
-
 ### GSVA PLOTS ###
 
 ```{r}
