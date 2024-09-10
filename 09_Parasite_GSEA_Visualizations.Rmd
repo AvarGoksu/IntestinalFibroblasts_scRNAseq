@@ -178,6 +178,24 @@ sanitize_filename <- function(filename) {
 }
 ```
 
+```{r}
+reactome_geneset_sizes <- reactome %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarise(GeneSetSize = n()) %>%
+  dplyr::rename("GeneSet" = "name")
+
+gobp_geneset_sizes <- gobp %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarise(GeneSetSize = n()) %>%
+  dplyr::rename("GeneSet" = "name")
+
+gomf_geneset_sizes <- gomf %>%
+  dplyr::group_by(name) %>%
+  dplyr::summarise(GeneSetSize = n()) %>%
+  dplyr::rename("GeneSet" = "name")
+```
+
+
 ### Prepare GSVA result data frames for visualization ###
 
 ```{r}
@@ -258,6 +276,7 @@ anova_results_twoway_reactome <- gsva_res_reactome_melted %>%
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
   dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(reactome_geneset_sizes, by="GeneSet") %>%  
   dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
@@ -269,7 +288,8 @@ anova_results_oneway_reactome <- gsva_res_reactome_melted %>%
     p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
-  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(reactome_geneset_sizes, by="GeneSet")
 
 anova_results_reactome <- merge(anova_results_twoway_reactome, anova_results_oneway_reactome, by="GeneSet")
 anova_results_reactome <- anova_results_reactome %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
@@ -292,6 +312,7 @@ anova_results_twoway_gobp <- gsva_res_gobp_melted %>%
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
   dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(gobp_geneset_sizes, by="GeneSet") %>%  
   dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
@@ -303,7 +324,8 @@ anova_results_oneway_gobp <- gsva_res_gobp_melted %>%
     p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
-  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(gobp_geneset_sizes, by="GeneSet")
 
 anova_results_gobp <- merge(anova_results_twoway_gobp, anova_results_oneway_gobp, by="GeneSet")
 anova_results_gobp <- anova_results_gobp %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
@@ -322,6 +344,7 @@ anova_results_twoway_gomf <- gsva_res_gomf_melted %>%
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
   dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(gomf_geneset_sizes, by="GeneSet") %>%
   dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
@@ -333,7 +356,8 @@ anova_results_oneway_gomf <- gsva_res_gomf_melted %>%
     p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
   dplyr::select(-aov_result, -aov_tidy) %>%
-  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::inner_join(gomf_geneset_sizes, by="GeneSet")
 
 anova_results_gomf <- merge(anova_results_twoway_gomf, anova_results_oneway_gomf, by="GeneSet")
 anova_results_gomf <- anova_results_gomf %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
