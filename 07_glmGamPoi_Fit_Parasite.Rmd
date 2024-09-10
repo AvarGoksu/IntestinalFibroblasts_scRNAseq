@@ -98,6 +98,8 @@ coldata <- coldata %>%
 #   dplyr::ungroup()
 ```
 
+### Generate Pseudobulk Samples ###
+
 ```{r}
 #Assign row names to coldata and check if the count table and coldata have matching column/row names:
 coldata <- as.data.frame(coldata)
@@ -170,6 +172,56 @@ final_pseudobulk_df <- final_pseudobulk_df[, rownames(pseudobulk_coldata_merged)
 unique(colnames(final_pseudobulk_df) == rownames(pseudobulk_coldata_merged))
 ```
 
+### DEX for infection related genes for each cell type (subset) ###
+
+```{r}
+# Get unique identities
+unique_identities <- unique(pseudobulk_coldata_merged$identity_simplified)
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Loop through each unique identity
+for (i in unique_identities) {
+  coldata_subset <- subset(pseudobulk_coldata_merged, identity_simplified == i)
+  final_pseudobulk_df_subset <- final_pseudobulk_df[, coldata_subset$SampleName]
+  
+  fit_infection <- glm_gp(as.matrix(final_pseudobulk_df_subset),
+                          col_data = coldata_subset,
+                          design = ~1+stage_grouped,
+                          size_factors = "deconvolution",
+                          subsample = FALSE,
+                          verbose = TRUE,
+                          on_disk = FALSE)
+  
+  res_infection <- test_de(fit_infection, reduced_design = ~1,
+                           max_lfc = Inf,
+                           verbose = TRUE) %>%
+    dplyr::select(-c(df1, df2)) %>%
+    dplyr::rename("Symbol" = "name") %>%
+    merge(genomic_features_unique, by = "Symbol") %>%
+    dplyr::mutate(
+      pval = case_when(
+        pval == 0 ~ .Machine$double.xmin,
+        .default = pval),
+      adj_pval = case_when(
+        adj_pval == 0 ~ .Machine$double.xmin,
+        .default = adj_pval)) %>%
+    dplyr::arrange(desc(f_statistic))
+  
+  # Add a new worksheet for the current identity
+  addWorksheet(wb, sheetName = i)
+  
+  # Write the result data frame to the corresponding worksheet
+  writeData(wb, sheet = i, x = res_infection)
+}
+
+# Save the workbook to an Excel file
+saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_IdentitySpecificInfection.xlsx", overwrite = TRUE)
+```
+
+### DEX for Cell Type Marker Genes with the Uninfected Subset ###
+
 ```{r}
 coldata_subset <- subset(pseudobulk_coldata_merged, stage_grouped == "uninfected_adult")
 final_pseudobulk_df_subset <- final_pseudobulk_df[, coldata_subset$SampleName]
@@ -240,93 +292,7 @@ for (identity_col in identity_columns) {
 saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults_Pseudobulked.xlsx", overwrite = TRUE)
 ```
 
-
-```{r}
-#DelayedArray::setAutoBlockSize(1e9)
-#DelayedArray::setAutoBlockShape('last-dim-grows-first')
-```
-
-```{r}
-# #cnt <- HDF5Array::writeHDF5Array(as.matrix(cnt))
-# cnt <- as.matrix(cnt)
-# gc()
-# 
-# coldata_subset <- subset(coldata, stage_grouped == "uninfected_adult")
-# #coldata_subset <- coldata_subset %>% dplyr::mutate(identity_trimmed = str_replace(identity, " FB| MF", ""))
-# cnt_subset <- cnt[, coldata_subset$CellName]
-# 
-# # Modify identity names to remove spaces and replace + with "pos" and - with "neg"
-# coldata_subset <- coldata_subset %>%
-#   mutate(identity = gsub("\\+", "pos", identity)) %>%
-#   mutate(identity = gsub("\\-", "neg", identity)) %>%
-#   mutate(identity = gsub("\\s+", "", identity))
-# 
-# # One-hot encode the identity column
-# coldata_wide <- coldata_subset %>%
-#   mutate(id = row_number()) %>%
-#   pivot_wider(names_from = identity, values_from = identity, values_fill = list(identity = "B"), values_fn = list(identity = ~ "A")) %>%
-#   select(-id)
-# 
-# 
-# rownames(coldata_wide) <- coldata_wide$CellName
-# 
-# unique(colnames(cnt) == rownames(coldata))
-# unique(colnames(cnt_subset) == rownames(coldata_wide))
-# 
-# # Extract the identity column names
-# identity_columns <- colnames(coldata_wide)[!colnames(coldata_wide) %in% colnames(coldata)]
-# 
-# # Create a new workbook
-# wb <- createWorkbook()
-# 
-# # Loop over each identity for "one versus rest" comparison
-# for (identity_col in identity_columns) {
-#   # Subset coldata_wide for the current identity
-#   coldata_subset <- coldata_wide %>% select(identity_col)
-#   
-#   # Fit the model with the updated design
-#   fit_markers <- glm_gp(cnt_subset,
-#                         col_data = coldata_wide,
-#                         design = as.formula(paste("~", identity_col)),
-#                         size_factors = "deconvolution",
-#                         subsample = FALSE,
-#                         verbose = TRUE,
-#                         on_disk = FALSE)
-#   
-#   # Create the contrast using cond() for one versus rest
-#   contrast_formula <- paste0("cond(", identity_col, " = 'A') - cond(", identity_col, " = 'B')")
-#   
-#   # Perform the test_de function with the contrast formula
-#   res <- test_de(fit_markers, contrast = eval(parse(text = contrast_formula)),
-#                  max_lfc = Inf,
-#                  verbose = TRUE) %>%
-#     dplyr::select(-c(df1, df2)) %>%
-#     dplyr::rename("Symbol" = "name") %>%
-#     merge(genomic_features_unique, by = "Symbol") %>%
-#     dplyr::mutate(
-#       pval = case_when(
-#         pval == 0 ~ .Machine$double.xmin,
-#         .default = pval),
-#       adj_pval = case_when(
-#         adj_pval == 0 ~ .Machine$double.xmin,
-#         .default = adj_pval)) %>%
-#     dplyr::mutate(signed_adj_pval = sign(lfc) * (-log10(adj_pval)),
-#                   signed_f_statistic = sign(lfc) * (f_statistic)) %>%
-#     dplyr::arrange(desc(signed_f_statistic))
-#   
-#   # Add a worksheet for the current identity
-#   addWorksheet(wb, identity_col)
-#   
-#   # Write the result to the worksheet
-#   writeData(wb, sheet = identity_col, res)
-#   
-#   # Print a message indicating completion of the current identity
-#   message(paste("Completed and added results for", identity_col, "to workbook"))
-# }
-# 
-# # Save the workbook
-# saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseMarkerResults.xlsx", overwrite = TRUE)
-```
+### DEX for General Infection Related Genes ###
 
 ```{r}
 fit <- glm_gp(as.matrix(final_pseudobulk_df),
@@ -336,10 +302,260 @@ fit <- glm_gp(as.matrix(final_pseudobulk_df),
               subsample = FALSE,
               verbose=TRUE,
               on_disk = FALSE)
+
+saveRDS(fit, "/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_pseudobulked.RDS")
 ```
 
 ```{r}
-saveRDS(fit, "/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_pseudobulked.RDS")
+identities <- unique(fit[["data"]]@colData@listData[["identity_simplified"]])
+infection_stages <- c("early", "peak", "repair")
+```
+
+```{r}
+res_interaction <- test_de(fit, reduced_design = ~1+identity_simplified+stage_grouped)
+
+res_interaction <- res_interaction %>%
+  dplyr::select(name, pval, adj_pval, f_statistic)
+
+res_interaction_merged <- merge(res_interaction, gene_metadata, by="name") %>% arrange(desc(f_statistic))
+
+write.xlsx(res_interaction_merged, "/vol/ExtraVol/ParasiteDEX/DEX_results_parasite_interaction_pseudobulked.xlsx")
+```
+
+```{r}
+res_infection <- test_de(fit, reduced_design = ~1+identity_simplified)
+
+res_infection <- res_infection %>%
+  dplyr::select(name, pval, adj_pval, f_statistic)
+
+res_infection_merged <- merge(res_infection, gene_metadata, by="name") %>% arrange(desc(f_statistic))
+
+write.xlsx(res_infection_merged, "/vol/ExtraVol/ParasiteDEX/DEX_results_parasite_infection_pseudobulked.xlsx")
+```
+
+### Volcano Plots for Selected Pairs ###
+
+```{r}
+res_PdgfrahiCd55posFB_vs_PdgfrahiFB <- test_de(fit, contrast = cond(identity_simplified = "PdgfrahiCd55posFB", stage_grouped = "uninfected_adult") - cond(identity_simplified = "PdgfrahiFB", stage_grouped = "uninfected_adult"))
+
+res_PdgfrahiCd55posFB_vs_PdgfrahiFB <- res_PdgfrahiCd55posFB_vs_PdgfrahiFB %>%
+  dplyr::mutate(logpadj = -log10(adj_pval),
+                signedpadj = sign(lfc)*logpadj, 
+                color = case_when(
+                  signedpadj > 3 ~ "darker_red",
+                  signedpadj < -3 ~ "darker_blue",
+                  TRUE ~ "light_grey")) %>%
+  dplyr::arrange(desc(signedpadj))
+
+write.xlsx(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfrahiCd55posFB_vs_PdgfrahiFB.xlsx")
+
+pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfrahiCd55posFB_vs_PdgfrahiFB.pdf", height=3, width=4)
+ggplot(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, aes(x=lfc, y=logpadj, color=color))+
+  geom_point()+
+  theme_minimal()+
+  geom_text_repel(data=head(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, n=5), aes(label=name), max.overlaps = Inf) +
+  geom_text_repel(data=tail(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, n=5), aes(label=name), max.overlaps = Inf) +
+  theme(panel.grid.major = element_blank())+
+  ggtitle("PdgfrahiCd55posFB_vs_PdgfrahiFB")+
+  scale_color_manual(values = c("light_grey" = "lightgrey", "darker_red" = "#e31a1c", "darker_blue" = "#1f78b4"))+
+  guides(color = "none")  # Remove the legend
+dev.off()
+```
+
+```{r}
+res_PdgfrahiJam2posFB_vs_PdgfrahiFB <- test_de(fit, contrast = cond(identity_simplified = "PdgfrahiJam2posFB", stage_grouped = "uninfected_adult") - cond(identity_simplified = "PdgfrahiFB", stage_grouped = "uninfected_adult"))
+
+res_PdgfrahiJam2posFB_vs_PdgfrahiFB <- res_PdgfrahiJam2posFB_vs_PdgfrahiFB %>%
+  dplyr::mutate(logpadj = -log10(adj_pval),
+                signedpadj = sign(lfc)*logpadj,
+                color = case_when(
+                  signedpadj > 3 ~ "darker_red",
+                  signedpadj < -3 ~ "darker_blue",
+                  TRUE ~ "light_grey")) %>%
+  dplyr::arrange(desc(signedpadj)) 
+
+write.xlsx(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfrahiJam2posFB_vs_PdgfrahiFB.xlsx")
+
+pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfrahiJam2posFB_vs_PdgfrahiFB.pdf", height=3, width=4)
+ggplot(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, aes(x=lfc, y=logpadj, color=color))+
+  geom_point()+
+  theme_minimal()+
+  geom_text_repel(data=head(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, n=5), aes(label=name), max.overlaps = Inf) +
+  geom_text_repel(data=tail(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, n=5), aes(label=name), max.overlaps = Inf) +
+  theme(panel.grid.major = element_blank())+
+  ggtitle("PdgfrahiJam2posFB_vs_PdgfrahiFB")+
+  scale_color_manual(values = c("light_grey" = "lightgrey", "darker_red" = "#e31a1c", "darker_blue" = "#1f78b4"))+
+  guides(color = "none")  # Remove the legend
+dev.off()
+```
+
+```{r}
+res_PdgfraloCd55posFB_vs_PdgfraloFB <- test_de(fit, contrast = cond(identity_simplified = "PdgfraloCd55posFB", stage_grouped = "uninfected_adult") - cond(identity_simplified = "PdgfraloFB", stage_grouped = "uninfected_adult"))
+
+res_PdgfraloCd55posFB_vs_PdgfraloFB <- res_PdgfraloCd55posFB_vs_PdgfraloFB %>%
+  dplyr::mutate(logpadj = -log10(adj_pval),
+                signedpadj = sign(lfc)*logpadj,
+                color = case_when(
+                  signedpadj > 3 ~ "darker_red",
+                  signedpadj < -3 ~ "darker_blue",
+                  TRUE ~ "light_grey")) %>%
+  dplyr::arrange(desc(signedpadj)) 
+
+write.xlsx(res_PdgfraloCd55posFB_vs_PdgfraloFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfraloCd55posFB_vs_PdgfraloFB.xlsx")
+
+pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfraloCd55posFB_vs_PdgfraloFB.pdf", height=3, width=4)
+ggplot(res_PdgfraloCd55posFB_vs_PdgfraloFB, aes(x=lfc, y=logpadj, color=color))+
+  geom_point()+
+  theme_minimal()+
+  geom_text_repel(data=head(res_PdgfraloCd55posFB_vs_PdgfraloFB, n=5), aes(label=name), max.overlaps = Inf) +
+  geom_text_repel(data=tail(res_PdgfraloCd55posFB_vs_PdgfraloFB, n=5), aes(label=name), max.overlaps = Inf) +
+  theme(panel.grid.major = element_blank())+
+  ggtitle("PdgfraloCd55posFB_vs_PdgfraloFB")+
+  scale_color_manual(values = c("light_grey" = "lightgrey", "darker_red" = "#e31a1c", "darker_blue" = "#1f78b4"))+
+  guides(color = "none")  # Remove the legend
+dev.off()
+```
+
+```{r}
+res_Ccl11posMF_vs_Ccl11negMF <- test_de(fit, contrast = cond(identity_simplified = "Ccl11posMF", stage_grouped = "uninfected_adult") - cond(identity_simplified = "Ccl11negMF", stage_grouped = "uninfected_adult"))
+
+res_Ccl11posMF_vs_Ccl11negMF <- res_Ccl11posMF_vs_Ccl11negMF %>%
+  dplyr::mutate(logpadj = -log10(adj_pval),
+                signedpadj = sign(lfc)*logpadj,
+                color = case_when(
+                  signedpadj > 3 ~ "darker_red",
+                  signedpadj < -3 ~ "darker_blue",
+                  TRUE ~ "light_grey")) %>%
+  dplyr::arrange(desc(signedpadj)) 
+
+write.xlsx(res_Ccl11posMF_vs_Ccl11negMF, "/vol/ExtraVol/ParasiteDEX/res_Ccl11posMF_vs_Ccl11negMF.xlsx")
+
+pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_Ccl11posMF_vs_Ccl11negMF.pdf", height=3, width=4)
+ggplot(res_Ccl11posMF_vs_Ccl11negMF, aes(x=lfc, y=logpadj, color=color))+
+  geom_point()+
+  theme_minimal()+
+  geom_text_repel(data=head(res_Ccl11posMF_vs_Ccl11negMF, n=5), aes(label=name), max.overlaps = Inf) +
+  geom_text_repel(data=tail(res_Ccl11posMF_vs_Ccl11negMF, n=5), aes(label=name), max.overlaps = Inf) +
+  theme(panel.grid.major = element_blank())+
+  ggtitle("Ccl11posMF_vs_Ccl11negMF")+
+  scale_color_manual(values = c("light_grey" = "lightgrey", "darker_red" = "#e31a1c", "darker_blue" = "#1f78b4"))+
+  guides(color = "none")  # Remove the legend
+dev.off()
+```
+
+### DEX for each infection stage in each cell type ###
+
+```{r}
+# Define your vectors
+stages <- c("early", "peak", "repair")
+identities <- unique(fit[["data"]]@colData@listData[["identity_simplified"]])
+
+# Initialize a list to store results
+results_list <- list()
+
+# Loop over each identity
+for (identity in identities) {
+  # Loop over each stage
+  for (stage in stages) {
+    # Construct the contrast expression
+    contrast_expr <- paste0("cond(stage_grouped = \"", stage, "\", identity_simplified = \"", identity, "\") - ",
+                            "cond(stage_grouped = \"uninfected_adult\", identity_simplified = \"", identity, "\")")
+    
+    # Evaluate the contrast
+    res <- test_de(fit, contrast = eval(parse(text = contrast_expr)), max_lfc = 5) %>%
+      dplyr::select(-c(df1, df2)) %>%
+      dplyr::rename("Symbol" = "name") %>%
+      merge(genomic_features_unique, by = "Symbol") %>%
+      # dplyr::mutate(
+      #   pval = case_when(
+      #     pval == 0 ~ .Machine$double.xmin,
+      #     .default = pval),
+      #   adj_pval = case_when(
+      #     adj_pval == 0 ~ .Machine$double.xmin,
+      #     .default = adj_pval)) %>%
+      dplyr::mutate(signed_adj_pval = sign(lfc)*(-log10(adj_pval)),
+                    signed_f_statistic = sign(lfc)*(f_statistic)) %>%
+      dplyr::arrange(desc(signed_f_statistic))
+    
+    # Store the result in the list
+    results_list[[paste0(stage, "_", identity)]] <- res
+  }
+}
+
+# Optionally, combine the results into a single data frame
+# combined_results <- do.call(rbind, lapply(results_list, as.data.frame))
+
+# Display the results
+# print(combined_results)
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Add each result as a separate sheet
+for (name in names(results_list)) {
+  addWorksheet(wb, name)
+  
+  # Write the data
+  writeData(wb, sheet = name, results_list[[name]])
+  
+  # Optionally, you can set column widths if needed
+  setColWidths(wb, sheet = name, cols = 1:ncol(results_list[[name]]), widths = "auto")
+}
+
+# Save the workbook
+saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_PairwiseResults_Pseudobulked.xlsx", overwrite = TRUE)
+```
+
+### DEX for each infection stage with all cell types pooled ###
+
+```{r}
+# Define your vector for stages
+stages <- c("early", "peak", "repair")
+
+# Initialize a list to store results
+results_list <- list()
+
+# Loop over each stage
+for (stage in stages) {
+  # Construct the contrast expression
+  contrast_expr <- paste0("cond(stage_grouped = \"", stage, "\") - ",
+                          "cond(stage_grouped = \"uninfected_adult\")")
+  
+  # Evaluate the contrast
+  res <- test_de(fit, contrast = eval(parse(text = contrast_expr)), max_lfc = 5) %>%
+    dplyr::select(-c(df1, df2)) %>%
+    dplyr::rename("Symbol" = "name") %>%
+    merge(genomic_features_unique, by = "Symbol") %>%
+    dplyr::mutate(signed_adj_pval = sign(lfc)*(-log10(adj_pval)),
+                  signed_f_statistic = sign(lfc)*(f_statistic)) %>%
+    dplyr::arrange(desc(signed_f_statistic))
+  
+  # Store the result in the list
+  results_list[[stage]] <- res
+}
+
+# Optionally, combine the results into a single data frame
+# combined_results <- do.call(rbind, lapply(results_list, as.data.frame))
+
+# Display the results
+# print(combined_results)
+
+# Create a new workbook
+wb <- createWorkbook()
+
+# Add each result as a separate sheet
+for (name in names(results_list)) {
+  addWorksheet(wb, name)
+  
+  # Write the data
+  writeData(wb, sheet = name, results_list[[name]])
+  
+  # Optionally, you can set column widths if needed
+  setColWidths(wb, sheet = name, cols = 1:ncol(results_list[[name]]), widths = "auto")
+}
+
+# Save the workbook
+saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/ParasiteDEX_OverallStageGenes_Pseudobulked.xlsx", overwrite = TRUE)
 ```
 
 ### THE END ###

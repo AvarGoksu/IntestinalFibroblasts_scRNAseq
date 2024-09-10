@@ -1,0 +1,141 @@
+```{r}
+rm(list = ls())
+```
+
+
+```{r}
+library(openxlsx)
+library(tidyverse)
+library(ggpubr)
+library(ggforce)
+library(reshape2)
+library(ggpubr)
+library(org.Mm.eg.db)
+library(AnnotationDbi)
+library(enrichplot)
+library(clusterProfiler)
+library(msigdbr)
+library(forcats)
+library(ggrepel)
+library(GSVA)
+library(SingleCellExperiment)
+library(scran)
+library(ReactomePA)
+```
+
+```{r}
+fit <- readRDS("/vol/ExtraVol/ParasiteDEX/parasite_glmGamPoi_fit_pseudobulked.RDS")
+cnt <- fit[["data"]]@assays@data@listData[["counts"]]
+sce <- SingleCellExperiment(assays = list(counts = cnt))
+sce <- computeSumFactors(sce)
+sce <- logNormCounts(sce)
+normalized_counts <- logcounts(sce)
+
+#Read the genomic feature table
+genomic_features <- read.csv("/vol/ExtraVol/Genomic_Features.tsv", row.names = NULL, sep="\t")
+genomic_features_unique <- genomic_features %>%
+  dplyr::select(c(Symbol, Name)) %>%
+  dplyr::distinct()
+protein_coding_genes <- unique(subset(genomic_features, Gene.Type == "protein-coding")$Symbol)
+
+normalized_counts <- subset(normalized_counts, rownames(normalized_counts) %in% protein_coding_genes)
+
+#This is to add full names of the genes to the results
+gene_metadata <- dplyr::select(genomic_features, c(Name, Symbol)) %>% 
+  dplyr::rename("name" = "Symbol",
+                "open_name" = "Name") %>%
+  distinct()
+
+entrezid_mapper <- AnnotationDbi::select(org.Mm.eg.db, keys=keys(org.Mm.eg.db), columns = c("SYMBOL", "ENTREZID")) %>% dplyr::rename("Symbol" = "SYMBOL")
+
+normalized_counts_temp <- as.data.frame(normalized_counts) %>%
+  dplyr::mutate(Symbol = rownames(normalized_counts))
+normalized_counts_withENTREZID <- merge(normalized_counts_temp, entrezid_mapper, by="Symbol")
+rownames(normalized_counts_withENTREZID) <- normalized_counts_withENTREZID$ENTREZID
+normalized_counts_withENTREZID <- dplyr::select(normalized_counts_withENTREZID, -c(ENTREZID, Symbol))
+rm(normalized_counts_temp)
+```
+
+```{r}
+reactome_gson <- gson_Reactome("mouse")
+gobp_gson <- gson_GO(OrgDb = "org.Mm.eg.db", ont = "BP")
+gomf_gson <- gson_GO(OrgDb = "org.Mm.eg.db", ont = "MF")
+```
+
+```{r}
+gsid2gene <- reactome_gson@gsid2gene
+gsid2name <- reactome_gson@gsid2name
+reactome_temp <- merge(gsid2gene, gsid2name, by="gsid")
+reactome_temp <- reactome_temp %>% dplyr::rename("ENTREZID"="gene") 
+reactome_temp <- merge(reactome_temp, entrezid_mapper, by="ENTREZID") %>% dplyr::arrange(name, Symbol)
+
+gsid2gene <- gobp_gson@gsid2gene
+gsid2name <- gobp_gson@gsid2name
+gobp <- merge(gsid2gene, gsid2name, by="gsid")
+gobp <- gobp %>% dplyr::rename("ENTREZID"="gene") 
+gobp <- merge(gobp, entrezid_mapper, by="ENTREZID") %>% dplyr::arrange(name, Symbol)
+
+gsid2gene <- gomf_gson@gsid2gene
+gsid2name <- gomf_gson@gsid2name
+gomf <- merge(gsid2gene, gsid2name, by="gsid")
+gomf <- gomf %>% dplyr::rename("ENTREZID"="gene") 
+gomf <- merge(gomf, entrezid_mapper, by="ENTREZID") %>% dplyr::arrange(name, Symbol)
+```
+
+```{r}
+genelist_df <- read.xlsx("/vol/ExtraVol/in_vitro_DEGs_IL-13_vs_ust_fitted values_FC1_p0.05.xlsx")
+
+IL13custom_UP <- subset(genelist_df, log2FC > 0) %>%
+  dplyr::select(X1) %>%
+  dplyr::rename("gene" = X1) %>%
+  dplyr::mutate("name" = "IL13custom_UP",
+                "gsid" = "CUSTOM",
+                gene = as.character(gene))
+
+IL13custom_DOWN <- subset(genelist_df, log2FC < 0) %>%
+  dplyr::select(X1) %>%
+  dplyr::rename("gene" = X1) %>%
+  dplyr::mutate("name" = "IL13custom_DOWN",
+                "gsid" = "CUSTOM",
+                gene = as.character(gene))
+
+IL13custom <- bind_rows(IL13custom_UP, IL13custom_DOWN)
+
+reactome <- bind_rows(reactome_temp, IL13custom)
+```
+
+```{r}
+write.xlsx(reactome, "/vol/ExtraVol/ParasiteDEX/GSEA/reactome_database.xlsx")
+write.xlsx(gobp, "/vol/ExtraVol/ParasiteDEX/GSEA/gobp_database.xlsx")
+write.xlsx(gomf, "/vol/ExtraVol/ParasiteDEX/GSEA/gomf_database.xlsx")
+```
+
+```{r}
+reactome_list <- unlist(split(dplyr::select(reactome,c(ENTREZID, name)), 
+                              f = reactome$name), 
+                        recursive = F)
+
+gobp_list <- unlist(split(dplyr::select(gobp,c(ENTREZID, name)), 
+                              f = gobp$name), 
+                        recursive = F)
+
+gomf_list <- unlist(split(dplyr::select(gomf,c(ENTREZID, name)), 
+                              f = gomf$name), 
+                        recursive = F)
+```
+
+```{r}
+gsva_object_reactome <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = reactome_list, minSize = 10)
+gsva_res_reactome <- gsva(gsva_object_reactome, verbose=TRUE)
+saveRDS(gsva_res_reactome, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_reactome.RDS")
+
+gsva_object_gobp <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = gobp_list, minSize = 10)
+gsva_res_gobp <- gsva(gsva_object_gobp, verbose=TRUE)
+saveRDS(gsva_res_gobp, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_gobp.RDS")
+
+
+gsva_object_gomf <- gsvaParam(exprData = as.matrix(normalized_counts_withENTREZID), geneSets = gomf_list, minSize = 10)
+gsva_res_gomf <- gsva(gsva_object_gomf, verbose=TRUE)
+saveRDS(gsva_res_gomf, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_gomf.RDS")
+```
+

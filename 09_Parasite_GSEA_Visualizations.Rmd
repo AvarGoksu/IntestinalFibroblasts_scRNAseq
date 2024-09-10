@@ -62,11 +62,11 @@ rm(normalized_counts_temp)
 ### Read the GSEA results ###
 
 ```{r}
-enrichment_reactome_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection.RDS")
-enrichment_reactome_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection_list.xlsx")
-
-enrichment_gobp_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection.RDS")
-enrichment_gobp_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection_list.xlsx")
+# enrichment_reactome_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection.RDS")
+# enrichment_reactome_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_reactome_infection_list.xlsx")
+# 
+# enrichment_gobp_infection <- readRDS("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection.RDS")
+# enrichment_gobp_infection_list <- read.xlsx("/vol/ExtraVol/ParasiteDEX/GSEA/enrichment_gobp_infection_list.xlsx")
 ```
 
 ```{r}
@@ -112,16 +112,6 @@ reactome <- bind_rows(reactome_temp, IL13custom)
 ```
 
 ```{r}
-# reactome_genesets_subset <- reactome %>% 
-#   subset(name %in% c("ECM proteoglycans",
-#                      "Degradation of the extracellular matrix",
-#                      "Attenuation phase",
-#                      "NF-kB is activated and signals survival",
-#                      "Integrin cell surface interactions",
-#                      "Extracellular matrix organization",
-#                      "IL13custom_UP",
-#                      "IL13custom_DOWN"))
-
 reactome_list <- unlist(split(reactome, 
                               f = reactome$name), 
                         recursive = F)
@@ -209,7 +199,7 @@ gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
 
 # Optionally, you can remove the OrderFactor column if it's no longer needed
 gsva_res_reactome_melted <- dplyr::select(gsva_res_reactome_melted, -OrderFactor)
-
+saveRDS(gsva_res_reactome_melted, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_reactome_melted.RDS")
 
 ### Prepare GOBP results ###
 
@@ -228,7 +218,7 @@ gsva_res_gobp_melted <- gsva_res_gobp_melted %>%
 
 # Optionally, you can remove the OrderFactor column if it's no longer needed
 gsva_res_gobp_melted <- dplyr::select(gsva_res_gobp_melted, -OrderFactor)
-
+saveRDS(gsva_res_gobp_melted, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_gobp_melted.RDS")
 
 ### Prepare GOMF results ###
 
@@ -247,13 +237,13 @@ gsva_res_gomf_melted <- gsva_res_gomf_melted %>%
 
 # Optionally, you can remove the OrderFactor column if it's no longer needed
 gsva_res_gomf_melted <- dplyr::select(gsva_res_gomf_melted, -OrderFactor)
+saveRDS(gsva_res_gomf_melted, "/vol/ExtraVol/ParasiteDEX/GSEA/gsva_res_gomf_melted.RDS")
 
 ```
 
 ### ANOVA ###
 
 ```{r}
-
 ### Reactome ###
 
 # Perform the two-way ANOVA analysis and summarize the results
@@ -263,19 +253,12 @@ anova_results_twoway_reactome <- gsva_res_reactome_melted %>%
     aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
     p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
-    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_stage = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
     p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
-  ) %>% 
-  rowwise() %>%
-  mutate(
-    tukey_result = list(glht(aov_result, linfct = mcp(identity_simplified = "Tukey"))),
-    tukey_tidy = list(tidy(summary(tukey_result))),
-    tukey_comparisons = list(tukey_tidy %>% 
-                              filter(grepl("identity_simplified", contrast)) %>%
-                              select(contrast, adj.p.value) %>%
-                              rename(comparison = contrast))
   ) %>%
-  unnest(tukey_comparisons)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
 anova_results_oneway_reactome <- gsva_res_reactome_melted %>%
@@ -283,16 +266,17 @@ anova_results_oneway_reactome <- gsva_res_reactome_melted %>%
   summarize(
     aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
-    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+    p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
-  select(-aov_result, -aov_tidy)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
 
 anova_results_reactome <- merge(anova_results_twoway_reactome, anova_results_oneway_reactome, by="GeneSet")
-anova_results_reactome <- anova_results_reactome %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
+anova_results_reactome <- anova_results_reactome %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
 
-gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
-  mutate(identity_simplified = as.factor(identity_simplified),
-         PlotGroup = as.factor(PlotGroup))
+# gsva_res_reactome_melted <- gsva_res_reactome_melted %>%
+#   mutate(identity_simplified = as.factor(identity_simplified),
+#          PlotGroup = as.factor(PlotGroup))
 
 ### GOBP ###
 
@@ -303,10 +287,12 @@ anova_results_twoway_gobp <- gsva_res_gobp_melted %>%
     aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
     p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
-    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_stage = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
     p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
   ) %>%
-  select(-aov_result, -aov_tidy)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
 anova_results_oneway_gobp <- gsva_res_gobp_melted %>%
@@ -314,12 +300,13 @@ anova_results_oneway_gobp <- gsva_res_gobp_melted %>%
   summarize(
     aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
-    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+    p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
-  select(-aov_result, -aov_tidy)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
 
 anova_results_gobp <- merge(anova_results_twoway_gobp, anova_results_oneway_gobp, by="GeneSet")
-anova_results_gobp <- anova_results_gobp %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
+anova_results_gobp <- anova_results_gobp %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
 
 ### GOMF ###
 
@@ -330,10 +317,12 @@ anova_results_twoway_gomf <- gsva_res_gomf_melted %>%
     aov_result = list(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ identity_simplified * PlotGroup, data = cur_data()))),
     p_value_identity = aov_tidy[[1]] %>% filter(term == "identity_simplified") %>% pull(p.value),
-    p_value_sample = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
+    p_value_stage = aov_tidy[[1]] %>% filter(term == "PlotGroup") %>% pull(p.value),
     p_value_interaction = aov_tidy[[1]] %>% filter(term == "identity_simplified:PlotGroup") %>% pull(p.value)
   ) %>%
-  select(-aov_result, -aov_tidy)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", "")) %>%
+  dplyr::arrange(p_value_interaction)
 
 # Perform the one-way ANOVA analysis and summarize the results
 anova_results_oneway_gomf <- gsva_res_gomf_melted %>%
@@ -341,14 +330,75 @@ anova_results_oneway_gomf <- gsva_res_gomf_melted %>%
   summarize(
     aov_result = list(aov(GSVAscore ~ SampleGroup, data = cur_data())),
     aov_tidy = list(tidy(aov(GSVAscore ~ SampleGroup, data = cur_data()))),
-    p_value = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
+    p_value_CellTypeVar = aov_tidy[[1]] %>% filter(term == "SampleGroup") %>% pull(p.value)
   ) %>%
-  select(-aov_result, -aov_tidy)
+  dplyr::select(-aov_result, -aov_tidy) %>%
+  dplyr::mutate(GeneSet = stringr::str_replace_all(GeneSet, ".gsid", ""))
 
 anova_results_gomf <- merge(anova_results_twoway_gomf, anova_results_oneway_gomf, by="GeneSet")
-anova_results_gomf <- anova_results_gomf %>% dplyr::arrange(p_value_identity, GeneSet, p_value)
-
+anova_results_gomf <- anova_results_gomf %>% dplyr::arrange(p_value_identity, GeneSet, p_value_CellTypeVar)
 ```
+
+```{r}
+# Define the suffixes and file names
+suffixes <- c("reactome", "gobp", "gomf")
+file_names <- c("ANOVA_CellTypeSpecific_reactome.xlsx", "ANOVA_CellTypeSpecific_gobp.xlsx", "ANOVA_CellTypeSpecific_gomf.xlsx")
+
+# Loop through each suffix and file name
+for (j in seq_along(suffixes)) {
+  suffix <- suffixes[j]
+  file_name <- file_names[j]
+  
+  # Get the data frame based on the suffix
+  df_name <- paste0("anova_results_oneway_", suffix)
+  df <- get(df_name)
+  
+  # Get unique identities
+  unique_identities <- unique(df$identity_simplified)
+  
+  # Create a new workbook
+  wb <- createWorkbook()
+  
+  # Loop through each unique identity
+  for (i in unique_identities) {
+    # Split the data frame by identity_simplified
+    df_split <- df[df$identity_simplified == i, ]
+    
+    # Sort the split data frame by p_value_CellTypeVar
+    df_split_sorted <- df_split %>% arrange(p_value_CellTypeVar)
+    
+    # Add a new worksheet for the current identity
+    addWorksheet(wb, sheetName = i)
+    
+    # Write the sorted data frame to the corresponding worksheet
+    writeData(wb, sheet = i, x = df_split_sorted)
+  }
+  
+  # Save the workbook to an Excel file
+  saveWorkbook(wb, file.path("/vol/ExtraVol/ParasiteDEX/GSEA", file_name), overwrite = TRUE)
+}
+```
+
+```{r}
+# Create a new workbook
+wb <- createWorkbook()
+
+# Write anova_results_twoway_reactome to the "reactome" sheet
+addWorksheet(wb, sheetName = "reactome")
+writeData(wb, sheet = "reactome", x = anova_results_twoway_reactome)
+
+# Write anova_results_twoway_gobp to the "gobp" sheet
+addWorksheet(wb, sheetName = "gobp")
+writeData(wb, sheet = "gobp", x = anova_results_twoway_gobp)
+
+# Write anova_results_twoway_gomf to the "gomf" sheet
+addWorksheet(wb, sheetName = "gomf")
+writeData(wb, sheet = "gomf", x = anova_results_twoway_gomf)
+
+# Save the workbook to an Excel file
+saveWorkbook(wb, "/vol/ExtraVol/ParasiteDEX/GSEA/ANOVA_TwoWay.xlsx", overwrite = TRUE)
+```
+
 ### GSVA PLOTS ###
 
 ```{r}
@@ -428,6 +478,7 @@ dev.off()
 ggplot(head(enrichment_reactome_infection_list,n=15), aes(x=GeneRatio, y=Description))+
   geom_dotplot()
 ```
+
 ```{r}
 pdf("/vol/ExtraVol/ParasiteDEX/GSEA/dotplot_reactome.pdf", width=6, height = 7)
 dotplot(enrichment_reactome_infection, showCategory=15, font.size=5)

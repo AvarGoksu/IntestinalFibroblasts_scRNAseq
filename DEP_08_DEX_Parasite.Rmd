@@ -66,20 +66,13 @@ infection_stages <- c("early", "peak", "repair")
 
 
 ```{r}
-# res <- test_de(fit, contrast = cond(stage_grouped = "uninfected_adult", identity = "Cd81+ FB") -
-#                                (cond(stage_grouped = "uninfected_adult", identity = "PdgfraloCd55+ FB") + cond(stage_grouped = "uninfected_adult", identity = "Pdgfrahi FB")),
+# res <- test_de(fit, contrast = cond(stage_grouped = "repair", identity_simplified = "PdgfrahiCd55posFB") -
+#                                cond(stage_grouped = "uninfected_adult", identity_simplified = "PdgfrahiCd55posFB"),
 #                max_lfc = 5,
 #                verbose = TRUE) %>%
 #   dplyr::select(-c(df1,df2)) %>%
 #   dplyr::rename("Symbol" = "name") %>%
 #   merge(genomic_features_unique, by="Symbol") %>%
-#   dplyr::mutate(
-#     pval = case_when(
-#     pval == 0 ~ .Machine$double.xmin,
-#     .default = pval),
-#     adj_pval = case_when(
-#     adj_pval == 0 ~ .Machine$double.xmin,
-#     .default = adj_pval)) %>%
 #   dplyr::mutate(signed_adj_pval = sign(lfc)*(-log10(adj_pval)),
 #                 signed_f_statistic = sign(lfc)*(f_statistic)) %>%
 #   dplyr::arrange(desc(signed_f_statistic))
@@ -119,6 +112,8 @@ res_PdgfrahiCd55posFB_vs_PdgfrahiFB <- res_PdgfrahiCd55posFB_vs_PdgfrahiFB %>%
                   TRUE ~ "light_grey")) %>%
   dplyr::arrange(desc(signedpadj))
 
+write.xlsx(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfrahiCd55posFB_vs_PdgfrahiFB.xlsx")
+
 pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfrahiCd55posFB_vs_PdgfrahiFB.pdf", height=3, width=4)
 ggplot(res_PdgfrahiCd55posFB_vs_PdgfrahiFB, aes(x=lfc, y=logpadj, color=color))+
   geom_point()+
@@ -143,6 +138,8 @@ res_PdgfrahiJam2posFB_vs_PdgfrahiFB <- res_PdgfrahiJam2posFB_vs_PdgfrahiFB %>%
                   signedpadj < -3 ~ "darker_blue",
                   TRUE ~ "light_grey")) %>%
   dplyr::arrange(desc(signedpadj)) 
+
+write.xlsx(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfrahiJam2posFB_vs_PdgfrahiFB.xlsx")
 
 pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfrahiJam2posFB_vs_PdgfrahiFB.pdf", height=3, width=4)
 ggplot(res_PdgfrahiJam2posFB_vs_PdgfrahiFB, aes(x=lfc, y=logpadj, color=color))+
@@ -169,6 +166,8 @@ res_PdgfraloCd55posFB_vs_PdgfraloFB <- res_PdgfraloCd55posFB_vs_PdgfraloFB %>%
                   TRUE ~ "light_grey")) %>%
   dplyr::arrange(desc(signedpadj)) 
 
+write.xlsx(res_PdgfraloCd55posFB_vs_PdgfraloFB, "/vol/ExtraVol/ParasiteDEX/res_PdgfraloCd55posFB_vs_PdgfraloFB.xlsx")
+
 pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_PdgfraloCd55posFB_vs_PdgfraloFB.pdf", height=3, width=4)
 ggplot(res_PdgfraloCd55posFB_vs_PdgfraloFB, aes(x=lfc, y=logpadj, color=color))+
   geom_point()+
@@ -193,6 +192,8 @@ res_Ccl11posMF_vs_Ccl11negMF <- res_Ccl11posMF_vs_Ccl11negMF %>%
                   signedpadj < -3 ~ "darker_blue",
                   TRUE ~ "light_grey")) %>%
   dplyr::arrange(desc(signedpadj)) 
+
+write.xlsx(res_Ccl11posMF_vs_Ccl11negMF, "/vol/ExtraVol/ParasiteDEX/res_Ccl11posMF_vs_Ccl11negMF.xlsx")
 
 pdf("/vol/ExtraVol/ParasiteDEX/VolcanoPlots/VolcanoPlot_Ccl11posMF_vs_Ccl11negMF.pdf", height=3, width=4)
 ggplot(res_Ccl11posMF_vs_Ccl11negMF, aes(x=lfc, y=logpadj, color=color))+
